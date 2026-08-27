@@ -1,0 +1,13 @@
+node_modules/
+docs/
+.env
+.prettierrc
+AGENTS.md
+ARCHITECTURE.md
+CHANGELOG.md
+DATABASE.md
+PROJECT_BIBLE.md
+README.md
+TODO.md
+postman/
+src/logs/
