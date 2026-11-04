@@ -21,7 +21,7 @@ const serviceRequestSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
-    subCategoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'SubCategory', required: true },
+    subCategoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'SubCategory', default: null },
     addressId: { type: mongoose.Schema.Types.ObjectId, ref: 'Address', required: true },
     serviceAddress: { type: String, required: true },
     description: { type: String, required: true, trim: true },

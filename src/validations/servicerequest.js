@@ -3,14 +3,15 @@ const Joi = require('joi');
 const createRequest = {
   body: Joi.object({
     categoryId: Joi.string().hex().length(24).required(),
-    subCategoryId: Joi.string().hex().length(24).required(),
-    addressId: Joi.string().hex().length(24).required(),
-    vendorId: Joi.string().hex().length(24).allow(null),
+    subCategoryId: Joi.string().hex().length(24).optional().allow(null, ''),
+    addressId: Joi.string().hex().length(24).optional().allow(null, ''),
+    vendorId: Joi.string().hex().length(24).optional().allow(null, ''),
+    serviceAddress: Joi.string().trim().optional().allow(''),
     description: Joi.string().trim().required(),
     images: Joi.array().items(Joi.string()).optional(),
     priority: Joi.string().valid('LOW', 'MEDIUM', 'HIGH', 'URGENT').default('MEDIUM'),
-    scheduledAt: Joi.date().iso().allow(null),
-    notes: Joi.string().trim().allow(''),
+    scheduledAt: Joi.date().iso().optional().allow(null),
+    notes: Joi.string().trim().optional().allow(''),
   }),
 };
 

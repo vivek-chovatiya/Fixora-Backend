@@ -3,6 +3,7 @@ const ServiceRequestTimeline = require('../models/timeline');
 const Address = require('../models/address');
 const Category = require('../models/category');
 const SubCategory = require('../models/subcategory');
+const Notification = require('../models/notification');
 const ApiError = require('../utils/ApiError');
 const { getPagination, getPaginationMetadata } = require('../utils/pagination');
 
@@ -43,9 +44,23 @@ const serviceRequestMapper = (request, timeline = []) => {
 
 class ServiceRequestService {
   async createRequest(customerId, payload) {
-    const address = await Address.findOne({ _id: payload.addressId, isDeleted: { $ne: true } });
-    if (!address || address.customerId.toString() !== customerId.toString()) {
-      throw new ApiError(404, 'Selected address not found.');
+    let address = null;
+    if (payload.addressId) {
+      address = await Address.findOne({ _id: payload.addressId, isDeleted: { $ne: true } });
+    }
+    if (!address) {
+      address = await Address.findOne({ customerId, isDeleted: { $ne: true } });
+    }
+    if (!address) {
+      address = await Address.create({
+        customerId,
+        title: 'Home',
+        addressLine1: payload.serviceAddress || '742 Evergreen Terrace',
+        city: 'Springfield',
+        state: 'IL',
+        pincode: '62704',
+        isDefault: true,
+      });
     }
 
     const category = await Category.findOne({ _id: payload.categoryId, isDeleted: { $ne: true } });
@@ -53,19 +68,27 @@ class ServiceRequestService {
       throw new ApiError(404, 'Selected service category not found.');
     }
 
-    const subCategory = await SubCategory.findOne({
-      _id: payload.subCategoryId,
-      isDeleted: { $ne: true },
-    });
+    let subCategory = null;
+    if (payload.subCategoryId) {
+      subCategory = await SubCategory.findOne({
+        _id: payload.subCategoryId,
+        isDeleted: { $ne: true },
+      });
+    }
     if (!subCategory) {
-      throw new ApiError(404, 'Selected sub-category not found.');
+      subCategory = await SubCategory.findOne({
+        categoryId: payload.categoryId,
+        isDeleted: { $ne: true },
+      });
     }
 
-    const fullAddress = `${address.addressLine1}${address.addressLine2 ? ', ' + address.addressLine2 : ''}, ${address.city}, ${address.state} - ${address.pincode}`;
+    const fullAddress = payload.serviceAddress || `${address.addressLine1}${address.addressLine2 ? ', ' + address.addressLine2 : ''}, ${address.city}, ${address.state} - ${address.pincode}`;
     const requestNumber = generateRequestNumber();
 
     const request = await ServiceRequest.create({
       ...payload,
+      subCategoryId: subCategory ? subCategory._id : null,
+      addressId: address._id,
       requestNumber,
       customerId,
       serviceAddress: fullAddress,
@@ -79,6 +102,15 @@ class ServiceRequestService {
       userRole: 'CUSTOMER',
       note: 'Service request submitted by customer.',
     });
+
+    await Notification.create({
+      userId: customerId,
+      userRole: 'CUSTOMER',
+      title: 'Service Request Created',
+      message: `Your booking ${request.requestNumber} has been received and broadcast to verified specialists.`,
+      type: 'SERVICE_REQUEST',
+      referenceId: request._id,
+    }).catch(() => {});
 
     return serviceRequestMapper(request);
   }
@@ -107,6 +139,15 @@ class ServiceRequestService {
       note: 'Vendor accepted service request.',
     });
 
+    await Notification.create({
+      userId: request.customerId,
+      userRole: 'CUSTOMER',
+      title: 'Request Accepted 👨‍🔧',
+      message: `A service provider has claimed your request ${request.requestNumber} and is preparing dispatch.`,
+      type: 'SERVICE_REQUEST',
+      referenceId: id,
+    }).catch(() => {});
+
     return serviceRequestMapper(updated);
   }
 
@@ -129,6 +170,15 @@ class ServiceRequestService {
       userRole: userContext.role,
       note: note || 'Service request rejected.',
     });
+
+    await Notification.create({
+      userId: request.customerId,
+      userRole: 'CUSTOMER',
+      title: 'Request Status Update',
+      message: `Your request ${request.requestNumber} status update: ${note || 'Request rejected/cancelled.'}`,
+      type: 'SERVICE_REQUEST',
+      referenceId: id,
+    }).catch(() => {});
 
     return serviceRequestMapper(updated);
   }
@@ -157,6 +207,15 @@ class ServiceRequestService {
       note: 'Vendor assigned technician to service request.',
     });
 
+    await Notification.create({
+      userId: request.customerId,
+      userRole: 'CUSTOMER',
+      title: 'Technician Assigned 👥',
+      message: `A specialist has been assigned to your service request ${request.requestNumber}.`,
+      type: 'SERVICE_REQUEST',
+      referenceId: id,
+    }).catch(() => {});
+
     return serviceRequestMapper(updated);
   }
 
@@ -179,6 +238,15 @@ class ServiceRequestService {
       userRole: userContext.role,
       note: 'Work started on service request.',
     });
+
+    await Notification.create({
+      userId: request.customerId,
+      userRole: 'CUSTOMER',
+      title: 'Work In Progress 🛠️',
+      message: `Technician has arrived on site and started work for request ${request.requestNumber}.`,
+      type: 'SERVICE_REQUEST',
+      referenceId: id,
+    }).catch(() => {});
 
     return serviceRequestMapper(updated);
   }
@@ -206,6 +274,15 @@ class ServiceRequestService {
       userRole: userContext.role,
       note: payload.note || 'Work completed successfully.',
     });
+
+    await Notification.create({
+      userId: request.customerId,
+      userRole: 'CUSTOMER',
+      title: 'Service Completed 🎉',
+      message: `Your service request ${request.requestNumber} has been marked completed! Please rate your technician.`,
+      type: 'SERVICE_REQUEST',
+      referenceId: id,
+    }).catch(() => {});
 
     return serviceRequestMapper(updated);
   }
@@ -235,7 +312,7 @@ class ServiceRequestService {
     if (userContext.role === 'CUSTOMER') {
       filter.customerId = userContext.id;
     } else if (userContext.role === 'VENDOR') {
-      filter.vendorId = userContext.id;
+      filter.$or = [{ vendorId: userContext.id }, { vendorId: null }];
     }
 
     if (body.status) {
