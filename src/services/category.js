@@ -1,5 +1,6 @@
 const Category = require('../models/category');
 const ApiError = require('../utils/ApiError');
+const { escapeRegex } = require('../utils/regex');
 const { getPagination, getPaginationMetadata } = require('../utils/pagination');
 
 const generateSlug = (name) => {
@@ -52,7 +53,7 @@ class CategoryService {
     const filter = { isDeleted: { $ne: true } };
 
     if (body.search) {
-      filter.name = { $regex: body.search, $options: 'i' };
+      filter.name = { $regex: escapeRegex(body.search), $options: 'i' };
     }
 
     if (body.status) {

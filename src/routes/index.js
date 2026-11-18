@@ -3,6 +3,7 @@ const router = express.Router();
 
 // Middlewares
 const authenticate = require('../middlewares/auth');
+const optionalAuthenticate = require('../middlewares/optionalAuth');
 const authorize = require('../middlewares/role');
 const validate = require('../middlewares/validation');
 
@@ -30,6 +31,7 @@ const addressValidation = require('../validations/address');
 const serviceRequestValidation = require('../validations/servicerequest');
 const reviewValidation = require('../validations/review');
 const adminValidation = require('../validations/admin');
+const notificationValidation = require('../validations/notification');
 
 // ----------------------------------------------------
 // Health Check
@@ -55,6 +57,49 @@ router.post(
 router.get('/auth/me', authenticate, authController.me);
 router.post('/auth/logout', authenticate, authController.logout);
 
+// Phone sign in — customer one-time code, vendor registration and permanent auth code
+// (shared contract, owner decision 17/11/2026; PROJECT_BIBLE.md section 7A)
+router.post(
+  '/auth/customer/otp/request',
+  validate(authValidation.requestCustomerOtp),
+  authController.requestCustomerOtp
+);
+router.post(
+  '/auth/customer/otp/verify',
+  validate(authValidation.verifyCustomerOtp),
+  authController.verifyCustomerOtp
+);
+router.post(
+  '/auth/vendor/register',
+  validate(authValidation.registerVendorByPhone),
+  authController.registerVendorByPhone
+);
+router.post(
+  '/auth/vendor/otp/request',
+  validate(authValidation.requestVendorOtp),
+  authController.requestVendorOtp
+);
+router.post(
+  '/auth/vendor/otp/verify',
+  validate(authValidation.verifyVendorOtp),
+  authController.verifyVendorOtp
+);
+router.post(
+  '/auth/vendor/auth-code/confirm',
+  validate(authValidation.confirmVendorAuthCode),
+  authController.confirmVendorAuthCode
+);
+router.post(
+  '/auth/vendor/auth-code/regenerate',
+  validate(authValidation.regenerateVendorAuthCode),
+  authController.regenerateVendorAuthCode
+);
+router.post(
+  '/auth/vendor/signin',
+  validate(authValidation.signInVendor),
+  authController.signInVendor
+);
+
 // ----------------------------------------------------
 // Customer Routes (No :id params in URL)
 // ----------------------------------------------------
@@ -68,12 +113,14 @@ router.post(
 router.post(
   '/customers/detail',
   authenticate,
+  authorize(['CUSTOMER', 'ADMIN']),
   validate(customerValidation.getById),
   customerController.getById
 );
 router.post(
   '/customers/update',
   authenticate,
+  authorize(['CUSTOMER', 'ADMIN']),
   validate(customerValidation.updateCustomer),
   customerController.update
 );
@@ -88,8 +135,19 @@ router.delete(
 // ----------------------------------------------------
 // Vendor Routes (No :id params in URL)
 // ----------------------------------------------------
-router.post('/vendors/list', validate(vendorValidation.listVendors), vendorController.getAll);
-router.post('/vendors/detail', validate(vendorValidation.getById), vendorController.getById);
+// Public; an administrator's token unlocks the full record (requests contract §3).
+router.post(
+  '/vendors/list',
+  optionalAuthenticate,
+  validate(vendorValidation.listVendors),
+  vendorController.getAll
+);
+router.post(
+  '/vendors/detail',
+  optionalAuthenticate,
+  validate(vendorValidation.getById),
+  vendorController.getById
+);
 router.post(
   '/vendors/update',
   authenticate,
@@ -110,6 +168,13 @@ router.delete(
   authorize(['ADMIN']),
   validate(vendorValidation.getById),
   vendorController.remove
+);
+router.post(
+  '/vendors/auth-code/regenerate',
+  authenticate,
+  authorize(['ADMIN']),
+  validate(vendorValidation.regenerateAuthCode),
+  vendorController.regenerateAuthCode
 );
 
 // ----------------------------------------------------
@@ -285,9 +350,16 @@ router.post(
 router.post(
   '/requests/reject',
   authenticate,
-  authorize(['VENDOR', 'ADMIN']),
+  authorize(['VENDOR']),
   validate(serviceRequestValidation.updateStatus),
   serviceRequestController.reject
+);
+router.post(
+  '/requests/cancel',
+  authenticate,
+  authorize(['CUSTOMER']),
+  validate(serviceRequestValidation.cancelRequest),
+  serviceRequestController.cancel
 );
 router.post(
   '/requests/assign',
@@ -306,7 +378,7 @@ router.post(
 router.post(
   '/requests/complete',
   authenticate,
-  authorize(['VENDOR', 'ADMIN']),
+  authorize(['VENDOR']),
   validate(serviceRequestValidation.completeRequest),
   serviceRequestController.completeWork
 );
@@ -326,13 +398,31 @@ router.post(
   validate(reviewValidation.listVendorReviews),
   reviewController.getVendorReviews
 );
+// A customer's own review of their own request (requests contract §8)
+router.post(
+  '/reviews/detail',
+  authenticate,
+  authorize(['CUSTOMER']),
+  validate(reviewValidation.reviewForRequest),
+  reviewController.getForRequest
+);
 
 // ----------------------------------------------------
 // Notification Routes (No :id params in URL)
 // ----------------------------------------------------
 router.get('/notifications', authenticate, notificationController.getAll);
-router.post('/notifications/list', authenticate, notificationController.getAll);
-router.post('/notifications/read', authenticate, notificationController.markAsRead);
+router.post(
+  '/notifications/list',
+  authenticate,
+  validate(notificationValidation.listNotifications),
+  notificationController.getAll
+);
+router.post(
+  '/notifications/read',
+  authenticate,
+  validate(notificationValidation.markAsRead),
+  notificationController.markAsRead
+);
 
 // ----------------------------------------------------
 // Admin Routes (No :id params in URL)

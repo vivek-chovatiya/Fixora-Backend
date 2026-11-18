@@ -3,13 +3,21 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const connectDB = require('./src/config/db');
+const syncAccountIndexes = require('./src/config/indexes');
+const runStartupMigrations = require('./src/config/migrations');
+const checkEnvironment = require('./src/config/startupChecks');
+const parseTrustProxy = require('./src/config/trustProxy');
 const routes = require('./src/routes');
 const errorHandler = require('./src/middlewares/error');
+const authRateLimit = require('./src/middlewares/authRateLimit');
 const ApiError = require('./src/utils/ApiError');
 const logger = require('./src/utils/logger');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+// Behind a proxy, read the real client IP from X-Forwarded-For (env TRUST_PROXY: hop count or false)
+app.set('trust proxy', parseTrustProxy(process.env.TRUST_PROXY));
 
 // Security and Request Parsing
 app.use(helmet());
@@ -24,6 +32,9 @@ app.use((req, res, next) => {
   next();
 });
 
+// Per-IP limit on every /auth/* route (requests contract §8)
+app.use('/api/v1/auth', authRateLimit);
+
 // API Routes (v1)
 app.use('/api/v1', routes);
 
@@ -37,8 +48,21 @@ app.use(errorHandler);
 
 // Start Server & Connect to DB
 const startServer = async () => {
+  // Refuse to start without JWT_SECRET; flag OTP_STATIC_CODE (ignored in production)
+  try {
+    checkEnvironment(process.env, logger);
+  } catch (error) {
+    logger.error(error.message);
+    process.exit(1);
+  }
+
   // Connect to Database
   await connectDB();
+
+  // One-time data fixes (phone normalisation, phone-verified backfill), then the indexes that
+  // depend on them; neither stops the server on a problem, both log it
+  await runStartupMigrations();
+  await syncAccountIndexes();
 
   // Start listening
   app.listen(PORT, () => {
@@ -46,6 +70,9 @@ const startServer = async () => {
   });
 };
 
-startServer();
+// Only connect and listen when run directly (node index.js); the test suite imports the app.
+if (require.main === module) {
+  startServer();
+}
 
 module.exports = app;

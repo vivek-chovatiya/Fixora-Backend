@@ -9,10 +9,20 @@ const Vendor = require('../models/vendor');
 const Admin = require('../models/admin');
 const Address = require('../models/address');
 const ServiceRequest = require('../models/servicerequest');
+const OtpChallenge = require('../models/otpchallenge');
+const VendorRegistration = require('../models/vendorregistration');
+const SignInAttempt = require('../models/signinattempt');
+const syncAccountIndexes = require('../config/indexes');
 
 const mongoUri = process.env.MONGO_URI || 'mongodb://localhost:27017/fixora';
 
 const seedDatabase = async () => {
+  // The seed deletes every account and request first: never against production data.
+  if (process.env.NODE_ENV === 'production') {
+    console.error('Refusing to seed: NODE_ENV is production.');
+    process.exit(1);
+  }
+
   try {
     await mongoose.connect(mongoUri);
     console.log('Connected to MongoDB for seeding...');
@@ -25,6 +35,12 @@ const seedDatabase = async () => {
     await Admin.deleteMany({});
     await Address.deleteMany({});
     await ServiceRequest.deleteMany({});
+    await OtpChallenge.deleteMany({});
+    await VendorRegistration.deleteMany({});
+    await SignInAttempt.deleteMany({});
+
+    // Phone sign in moved customer/vendor uniqueness to partial indexes; replace the old ones.
+    await syncAccountIndexes();
 
     const hashedPassword = await bcrypt.hash('Password123!', 10);
 
@@ -125,6 +141,66 @@ const seedDatabase = async () => {
 
     console.log('Created Demo Vendors:', vendor1.email, vendor2.email);
 
+    // 6b. Phone sign-in demo accounts (shared contract, 17/11/2026). They match the mobile app's
+    // mock data, so the same demo steps work against this backend: customers sign in with the
+    // one-time code (OTP_STATIC_CODE, 123456 in development), vendors with phone + auth code.
+    // Auth codes are stored hashed like any issued code, and never printed.
+    const phoneCustomers = await Customer.insertMany([
+      {
+        firstName: 'Asha',
+        lastName: 'Patel',
+        phone: '9876543210',
+        isVerified: true,
+        phoneVerifiedAt: new Date(),
+      },
+      // The app's long-name profile edge, mirrored from its mock accounts.
+      {
+        firstName: 'Venkata Subrahmanya Lakshmi',
+        lastName: 'Narasimhamurthy-Ramachandran',
+        email: 'venkata.narasimhamurthy.ramachandran@example.com',
+        phone: '9876543211',
+        isVerified: true,
+        phoneVerifiedAt: new Date(),
+      },
+    ]);
+
+    const now = new Date();
+    const phoneVendors = await Vendor.insertMany([
+      {
+        businessName: 'Kumar Electricals',
+        ownerName: 'Ravi Kumar',
+        ownerFirstName: 'Ravi',
+        ownerLastName: 'Kumar',
+        phone: '9000000001',
+        authCodeHash: await bcrypt.hash('482913', 10),
+        authCodeIssuedAt: now,
+        phoneVerifiedAt: now,
+        categoryIds: [createdCategories[0]._id],
+        approvalStatus: 'APPROVED',
+        status: 'ACTIVE',
+        availability: true,
+      },
+      {
+        businessName: 'Iyer Home Services',
+        ownerName: 'Meena Iyer',
+        ownerFirstName: 'Meena',
+        ownerLastName: 'Iyer',
+        email: 'meena.iyer@example.com',
+        phone: '9000000002',
+        authCodeHash: await bcrypt.hash('573014', 10),
+        authCodeIssuedAt: now,
+        phoneVerifiedAt: now,
+        categoryIds: [createdCategories[1]._id, createdCategories[4]._id],
+        approvalStatus: 'APPROVED',
+        status: 'ACTIVE',
+        availability: true,
+      },
+    ]);
+
+    console.log(
+      `Created ${phoneCustomers.length} phone customers and ${phoneVendors.length} phone vendors (codes not shown).`
+    );
+
     // 7. Create Demo Service Requests
     const req1 = await ServiceRequest.create({
       requestNumber: 'REQ-' + Math.floor(100000 + Math.random() * 900000),
@@ -134,6 +210,8 @@ const seedDatabase = async () => {
       subCategoryId: createdSubCategories[0]._id,
       addressId: address._id,
       serviceAddress: '742 Evergreen Terrace, Springfield',
+      serviceAddressDetails: { line1: '742 Evergreen Terrace', city: 'Springfield', pincode: '62704' },
+      serviceArea: 'Springfield',
       description: 'Living room ceiling fan is making clicking noise and running slow.',
       priority: 'HIGH',
       status: 'IN_PROGRESS',
@@ -149,6 +227,8 @@ const seedDatabase = async () => {
       subCategoryId: createdSubCategories[3]._id,
       addressId: address._id,
       serviceAddress: '742 Evergreen Terrace, Springfield',
+      serviceAddressDetails: { line1: '742 Evergreen Terrace', city: 'Springfield', pincode: '62704' },
+      serviceArea: 'Springfield',
       description: 'Kitchen sink tap is dripping constantly. Need urgent repair.',
       priority: 'URGENT',
       status: 'PENDING',

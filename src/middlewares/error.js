@@ -1,33 +1,105 @@
 const logger = require('../utils/logger');
+const ApiError = require('../utils/ApiError');
+const CoreApiError = require('../core/errors/ApiError');
+const { ERROR_CODES, codeForStatus } = require('../utils/errorCodes');
+
+// Every failure leaves here as { success, message, code, errors, data }. Only errors this codebase
+// raised on purpose (ApiError, Joi) keep their own message; anything else is an internal fault and
+// answers a generic 500 INTERNAL_ERROR whatever NODE_ENV says, because a driver or library message
+// can quote the request (a malformed JSON body's parse error quotes the body, codes included).
+//
+// A malformed id or a model validation failure is the caller's input, not a fault: 400
+// VALIDATION_FAILED naming the field (requests contract §8), never the value.
+//
+// ⚠️ Logs carry field names only. A Joi or Mongoose message can quote the rejected value, and that
+// value can be a one-time code or a vendor auth code. For a 500, the error's name and stack frames
+// are logged without its message line, for the same reason.
+
+const invalidInput = (fields) => ({
+  statusCode: 400,
+  message: 'Validation Failed',
+  code: ERROR_CODES.VALIDATION_FAILED,
+  errors: fields.map((field) => ({ field, message: `"${field}" is not valid.` })),
+});
+
+const classify = (err) => {
+  if (err.isJoi) {
+    return {
+      statusCode: 400,
+      message: 'Validation Failed',
+      code: ERROR_CODES.VALIDATION_FAILED,
+      errors: err.details.map((detail) => ({
+        field: detail.path.join('.'),
+        message: detail.message,
+      })),
+    };
+  }
+  if (err instanceof ApiError || err instanceof CoreApiError) {
+    const statusCode = err.statusCode || 500;
+    return {
+      statusCode,
+      message: err.message,
+      code: err.code || codeForStatus(statusCode),
+      errors: err.errors || null,
+      // e.g. Retry-After on a lockout or rate limit.
+      headers: err.headers || null,
+    };
+  }
+  if (err.name === 'CastError') {
+    return invalidInput([err.path || 'id']);
+  }
+  if (err.name === 'ValidationError' && err.errors) {
+    return invalidInput(Object.keys(err.errors));
+  }
+  if (err.name === 'BSONError') {
+    return invalidInput(['id']);
+  }
+  if (err.type && err.status >= 400 && err.status < 500) {
+    // body-parser (express.json) failures: malformed JSON, body too large, bad charset.
+    return {
+      statusCode: err.status,
+      message: 'The request body could not be read.',
+      code: codeForStatus(err.status),
+      errors: null,
+    };
+  }
+  return null;
+};
+
+const stackFrames = (err) =>
+  String((err && err.stack) || '')
+    .split('\n')
+    .slice(1)
+    .join('\n');
 
 const errorHandler = (err, req, res, next) => {
-  let statusCode = err.statusCode || 500;
-  let message = err.message || 'Internal Server Error';
-  let errors = err.errors || null;
-
-  if (err.isJoi) {
-    statusCode = 400;
-    message = 'Validation Failed';
-    errors = err.details.map((detail) => ({
-      field: detail.path.join('.'),
-      message: detail.message,
-    }));
-  }
+  const known = classify(err) || {};
+  const statusCode = known.statusCode || 500;
+  const code = known.code || ERROR_CODES.INTERNAL_ERROR;
+  const errors = known.errors || null;
+  const message = statusCode >= 500 ? 'Internal Server Error' : known.message;
 
   if (statusCode >= 500) {
-    logger.error(`[Unhandled Error] ${req.method} ${req.originalUrl}:`, err);
+    logger.error(`[Unhandled Error] ${req.method} ${req.originalUrl}: ${err && err.name}`, {
+      code: err && typeof err.code !== 'object' ? err.code : undefined,
+      stack: stackFrames(err),
+    });
   } else {
-    logger.warn(`[Operational Warning] ${req.method} ${req.originalUrl}: ${message}`, { errors });
+    logger.warn(`[Operational Warning] ${req.method} ${req.originalUrl}: ${code} ${message}`, {
+      fields: errors ? errors.map((error) => error.field) : [],
+    });
+  }
+
+  if (known.headers) {
+    res.set(known.headers);
   }
 
   return res.status(statusCode).json({
     success: false,
-    message:
-      statusCode >= 500 && process.env.NODE_ENV === 'production'
-        ? 'Internal Server Error'
-        : message,
+    message,
+    code,
+    errors,
     data: null,
-    errors: errors,
   });
 };
 

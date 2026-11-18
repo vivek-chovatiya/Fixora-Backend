@@ -16,10 +16,28 @@ const addressMapper = (address) => {
     latitude: address.latitude,
     longitude: address.longitude,
     isDefault: address.isDefault,
-    fullAddress: `${address.addressLine1}${address.addressLine2 ? ', ' + address.addressLine2 : ''}, ${address.city}, ${address.state} - ${address.pincode}`,
+    // `state` is optional (requests contract §7), so it is left out rather than printed empty.
+    fullAddress: [
+      address.addressLine1,
+      address.addressLine2,
+      address.city,
+      [address.state, address.pincode].filter(Boolean).join(' - '),
+    ]
+      .filter(Boolean)
+      .join(', '),
     createdAt: address.createdAt,
     updatedAt: address.updatedAt,
   };
+};
+
+// A cleared part is stored as '' whether the client sent null or ''.
+const CLEARABLE_PARTS = ['addressLine2', 'city', 'state', 'pincode'];
+const withClearedParts = (payload) => {
+  const cleaned = { ...payload };
+  for (const part of CLEARABLE_PARTS) {
+    if (cleaned[part] === null) cleaned[part] = '';
+  }
+  return cleaned;
 };
 
 class AddressService {
@@ -29,7 +47,7 @@ class AddressService {
     }
 
     const address = await Address.create({
-      ...payload,
+      ...withClearedParts(payload),
       customerId,
     });
 
@@ -66,7 +84,7 @@ class AddressService {
       await Customer.findByIdAndUpdate(customerId, { defaultAddress: id });
     }
 
-    const updated = await Address.findByIdAndUpdate(id, payload, { new: true });
+    const updated = await Address.findByIdAndUpdate(id, withClearedParts(payload), { new: true });
     return addressMapper(updated);
   }
 

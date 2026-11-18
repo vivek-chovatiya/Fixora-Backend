@@ -1,23 +1,39 @@
-const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 const ApiError = require('../utils/ApiError');
+const { verifyToken } = require('../utils/token');
+const { findUsableAccount } = require('../services/tokenaccount');
 
-const authenticate = (req, res, next) => {
+// A valid signature is not enough (requests contract §8): the account must still exist, be
+// ACTIVE, and the token must carry its current version. One small read per request.
+const authenticate = async (req, res, next) => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return next(new ApiError(401, 'Authentication token missing or invalid.'));
   }
 
-  const token = authHeader.split(' ')[1];
-
+  let decoded;
   try {
-    const jwtSecret = process.env.JWT_SECRET || 'fixora_secret_key_change_in_production';
-    const decoded = jwt.verify(token, jwtSecret);
-    req.user = decoded;
-    return next();
+    decoded = verifyToken(authHeader.split(' ')[1]);
   } catch (error) {
     return next(new ApiError(401, 'Invalid or expired authentication token.'));
   }
+
+  if (!mongoose.isValidObjectId(decoded.id)) {
+    return next(new ApiError(401, 'Invalid or expired authentication token.'));
+  }
+
+  try {
+    const account = await findUsableAccount(decoded);
+    if (!account) {
+      return next(new ApiError(401, 'Invalid or expired authentication token.'));
+    }
+  } catch (error) {
+    return next(error);
+  }
+
+  req.user = decoded;
+  return next();
 };
 
 module.exports = authenticate;

@@ -1,6 +1,9 @@
 const bcrypt = require('bcryptjs');
 const Customer = require('../models/customer');
+const Address = require('../models/address');
 const ApiError = require('../utils/ApiError');
+const { escapeRegex } = require('../utils/regex');
+const { ERROR_CODES } = require('../utils/errorCodes');
 const { getPagination, getPaginationMetadata } = require('../utils/pagination');
 
 const customerMapper = (customer) => {
@@ -67,10 +70,10 @@ class CustomerService {
 
     if (body.search) {
       filter.$or = [
-        { firstName: { $regex: body.search, $options: 'i' } },
-        { lastName: { $regex: body.search, $options: 'i' } },
-        { email: { $regex: body.search, $options: 'i' } },
-        { phone: { $regex: body.search, $options: 'i' } },
+        { firstName: { $regex: escapeRegex(body.search), $options: 'i' } },
+        { lastName: { $regex: escapeRegex(body.search), $options: 'i' } },
+        { email: { $regex: escapeRegex(body.search), $options: 'i' } },
+        { phone: { $regex: escapeRegex(body.search), $options: 'i' } },
       ];
     }
 
@@ -105,17 +108,41 @@ class CustomerService {
       }
     }
 
-    if (payload.phone && payload.phone !== customer.phone) {
-      const existingPhone = await Customer.findOne({
-        phone: payload.phone,
+    // The sign-in phone is identity (requests contract §2, lead 17/11/2026): changing it will be
+    // its own verified flow. The unchanged value is accepted, so a client can send the whole form.
+    if (payload.phone !== undefined && payload.phone !== customer.phone) {
+      throw new ApiError(
+        400,
+        'Validation Failed',
+        [{ field: 'phone', message: 'The sign-in phone number cannot be changed here.' }],
+        ERROR_CODES.VALIDATION_FAILED
+      );
+    }
+
+    // The default address must be one of this customer's own: /auth/me populates it, so another
+    // customer's address id here would hand their address out.
+    if (payload.defaultAddress) {
+      const owned = await Address.exists({
+        _id: payload.defaultAddress,
+        customerId: id,
         isDeleted: { $ne: true },
       });
-      if (existingPhone) {
-        throw new ApiError(409, 'Customer with this phone number already exists.');
+      if (!owned) {
+        throw new ApiError(
+          400,
+          'Validation Failed',
+          [{ field: 'defaultAddress', message: 'This address is not in your address book.' }],
+          ERROR_CODES.VALIDATION_FAILED
+        );
       }
     }
 
-    const updated = await Customer.findByIdAndUpdate(id, payload, { new: true });
+    // Suspending ends every session at once (requests contract §8); reactivating does not bring
+    // the old ones back.
+    const suspending = payload.status && payload.status !== 'ACTIVE' && payload.status !== customer.status;
+    const changes = suspending ? { ...payload, $inc: { tokenVersion: 1 } } : payload;
+
+    const updated = await Customer.findByIdAndUpdate(id, changes, { new: true });
     return customerMapper(updated);
   }
 
@@ -124,7 +151,11 @@ class CustomerService {
     if (!customer) {
       throw new ApiError(404, 'Customer not found.');
     }
-    await Customer.findByIdAndUpdate(id, { isDeleted: true, deletedAt: new Date() });
+    await Customer.findByIdAndUpdate(id, {
+      isDeleted: true,
+      deletedAt: new Date(),
+      $inc: { tokenVersion: 1 },
+    });
     return true;
   }
 }

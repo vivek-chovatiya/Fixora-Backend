@@ -11,6 +11,15 @@ class ReviewController {
     }
   }
 
+  async getForRequest(req, res, next) {
+    try {
+      const review = await reviewService.getReviewForRequest(req.user.id, req.body.requestId);
+      return ApiResponse.success(res, 'Review retrieved successfully.', review);
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async getVendorReviews(req, res, next) {
     try {
       const { data, meta } = await reviewService.getVendorReviews(req.body.vendorId, req.body);

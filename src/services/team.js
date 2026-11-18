@@ -20,6 +20,7 @@ class TeamService {
   async createMember(vendorId, payload) {
     const member = await TeamMember.create({
       ...payload,
+      phone: payload.phone || '',
       vendorId,
     });
     return teamMapper(member);
@@ -45,7 +46,9 @@ class TeamService {
     if (!member || member.vendorId.toString() !== vendorId.toString()) {
       throw new ApiError(404, 'Team member not found.');
     }
-    const updated = await TeamMember.findByIdAndUpdate(id, payload, { new: true });
+    // A cleared phone is stored as '' whether the client sent null or '' (requests contract §7).
+    const changes = payload.phone === null ? { ...payload, phone: '' } : payload;
+    const updated = await TeamMember.findByIdAndUpdate(id, changes, { new: true });
     return teamMapper(updated);
   }
 

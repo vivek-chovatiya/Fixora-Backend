@@ -1,5 +1,21 @@
 const mongoose = require('mongoose');
 
+// Where the work happens, as the customer gave it (requests contract §6). Stored on the request
+// only — never copied into the address book.
+const serviceAddressDetailsSchema = new mongoose.Schema(
+  {
+    line1: { type: String, trim: true },
+    line2: { type: String, trim: true },
+    landmark: { type: String, trim: true },
+    area: { type: String, trim: true },
+    city: { type: String, trim: true },
+    pincode: { type: String, trim: true },
+    latitude: { type: Number },
+    longitude: { type: Number },
+  },
+  { _id: false }
+);
+
 const serviceRequestSchema = new mongoose.Schema(
   {
     requestNumber: { type: String, required: true, unique: true, index: true },
@@ -10,6 +26,9 @@ const serviceRequestSchema = new mongoose.Schema(
       index: true,
     },
     vendorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Vendor', default: null, index: true },
+    // Vendors who declined this open broadcast request: it stays PENDING for everyone else and
+    // leaves only their list (requests contract §4). Never shown to customers or other vendors.
+    declinedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Vendor' }],
     assignedTeamMemberId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'TeamMember',
@@ -22,9 +41,13 @@ const serviceRequestSchema = new mongoose.Schema(
       index: true,
     },
     subCategoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'SubCategory', default: null },
-    addressId: { type: mongoose.Schema.Types.ObjectId, ref: 'Address', required: true },
+    // Set only when the customer picked a saved address; a typed one lives in serviceAddress.
+    addressId: { type: mongoose.Schema.Types.ObjectId, ref: 'Address', default: null },
     serviceAddress: { type: String, required: true },
-    description: { type: String, required: true, trim: true },
+    serviceAddressDetails: { type: serviceAddressDetailsSchema, default: undefined },
+    // The area/locality alone: all a vendor sees before they hold the work (bible §32).
+    serviceArea: { type: String, trim: true, default: '' },
+    description: { type: String, trim: true, default: '' },
     images: [{ type: String }],
     completionImages: [{ type: String }],
     priority: { type: String, enum: ['LOW', 'MEDIUM', 'HIGH', 'URGENT'], default: 'MEDIUM' },

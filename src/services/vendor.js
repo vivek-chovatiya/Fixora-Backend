@@ -1,6 +1,8 @@
 const bcrypt = require('bcryptjs');
 const Vendor = require('../models/vendor');
 const ApiError = require('../utils/ApiError');
+const { escapeRegex } = require('../utils/regex');
+const { ERROR_CODES } = require('../utils/errorCodes');
 const { getPagination, getPaginationMetadata } = require('../utils/pagination');
 
 const vendorMapper = (vendor) => {
@@ -9,6 +11,8 @@ const vendorMapper = (vendor) => {
     id: vendor._id,
     businessName: vendor.businessName,
     ownerName: vendor.ownerName,
+    ownerFirstName: vendor.ownerFirstName,
+    ownerLastName: vendor.ownerLastName,
     email: vendor.email,
     phone: vendor.phone,
     categoryIds: vendor.categoryIds,
@@ -27,7 +31,70 @@ const vendorMapper = (vendor) => {
   };
 };
 
+// The vendor as anyone may see them (requests contract §3): no email, phone, documents or status
+// flags. Used for /vendors/list and /vendors/detail unless an administrator (or the vendor
+// themself) asks.
+const publicVendorMapper = (vendor) => {
+  if (!vendor) return null;
+  return {
+    id: vendor._id,
+    businessName: vendor.businessName,
+    ownerName: vendor.ownerName,
+    description: vendor.description,
+    profileImage: vendor.profileImage,
+    categoryIds: vendor.categoryIds,
+    address: vendor.address,
+    averageRating: vendor.averageRating,
+    totalReviews: vendor.totalReviews,
+    availability: vendor.availability,
+  };
+};
+
+// Only vendors a customer can actually book are public.
+const PUBLIC_FILTER = Object.freeze({ status: 'ACTIVE', approvalStatus: 'APPROVED' });
+
 class VendorService {
+  async getPublicVendorById(id) {
+    const vendor = await Vendor.findOne({
+      _id: id,
+      ...PUBLIC_FILTER,
+      isDeleted: { $ne: true },
+    }).populate('categoryIds');
+    if (!vendor) {
+      throw new ApiError(404, 'Vendor not found.');
+    }
+    return publicVendorMapper(vendor);
+  }
+
+  // Public search covers names only: searching email or phone would let anyone test whether a
+  // number or address belongs to a vendor. Status filters are ignored for the same reason.
+  async getPublicVendors(body = {}) {
+    const { page, limit, skip } = getPagination(body);
+    const filter = { ...PUBLIC_FILTER, isDeleted: { $ne: true } };
+
+    if (body.search) {
+      const pattern = escapeRegex(body.search);
+      filter.$or = [
+        { businessName: { $regex: pattern, $options: 'i' } },
+        { ownerName: { $regex: pattern, $options: 'i' } },
+      ];
+    }
+
+    if (body.categoryId) {
+      filter.categoryIds = body.categoryId;
+    }
+
+    const [vendors, total] = await Promise.all([
+      Vendor.find(filter).skip(skip).limit(limit).sort({ createdAt: -1 }),
+      Vendor.countDocuments(filter),
+    ]);
+
+    return {
+      data: vendors.map(publicVendorMapper),
+      meta: getPaginationMetadata(total, page, limit),
+    };
+  }
+
   async createVendor(payload) {
     const existingEmail = await Vendor.findOne({
       email: payload.email.toLowerCase(),
@@ -69,10 +136,10 @@ class VendorService {
 
     if (body.search) {
       filter.$or = [
-        { businessName: { $regex: body.search, $options: 'i' } },
-        { ownerName: { $regex: body.search, $options: 'i' } },
-        { email: { $regex: body.search, $options: 'i' } },
-        { phone: { $regex: body.search, $options: 'i' } },
+        { businessName: { $regex: escapeRegex(body.search), $options: 'i' } },
+        { ownerName: { $regex: escapeRegex(body.search), $options: 'i' } },
+        { email: { $regex: escapeRegex(body.search), $options: 'i' } },
+        { phone: { $regex: escapeRegex(body.search), $options: 'i' } },
       ];
     }
 
@@ -115,14 +182,15 @@ class VendorService {
       }
     }
 
-    if (payload.phone && payload.phone !== vendor.phone) {
-      const existingPhone = await Vendor.findOne({
-        phone: payload.phone,
-        isDeleted: { $ne: true },
-      });
-      if (existingPhone) {
-        throw new ApiError(409, 'Vendor with this phone number already exists.');
-      }
+    // The sign-in phone is identity (requests contract §2, lead 17/11/2026): changing it will be
+    // its own verified flow. The unchanged value is accepted, so a client can send the whole form.
+    if (payload.phone !== undefined && payload.phone !== vendor.phone) {
+      throw new ApiError(
+        400,
+        'Validation Failed',
+        [{ field: 'phone', message: 'The sign-in phone number cannot be changed here.' }],
+        ERROR_CODES.VALIDATION_FAILED
+      );
     }
 
     const updated = await Vendor.findByIdAndUpdate(id, payload, { new: true });
@@ -144,7 +212,11 @@ class VendorService {
     if (!vendor) {
       throw new ApiError(404, 'Vendor not found.');
     }
-    await Vendor.findByIdAndUpdate(id, { isDeleted: true, deletedAt: new Date() });
+    await Vendor.findByIdAndUpdate(id, {
+      isDeleted: true,
+      deletedAt: new Date(),
+      $inc: { tokenVersion: 1 },
+    });
     return true;
   }
 }

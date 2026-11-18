@@ -2,13 +2,19 @@ const Review = require('../models/review');
 const ServiceRequest = require('../models/servicerequest');
 const Vendor = require('../models/vendor');
 const ApiError = require('../utils/ApiError');
+const { ERROR_CODES } = require('../utils/errorCodes');
 const { getPagination, getPaginationMetadata } = require('../utils/pagination');
 
-const reviewMapper = (review) => {
+// Every review carries the reviewed request's requestNumber beside its id (requests contract §7),
+// so an app can show the reference without a second read. `serviceRequestId` stays the id.
+const reviewMapper = (review, requestNumber = null) => {
   if (!review) return null;
+  const request = review.serviceRequestId;
+  const populated = Boolean(request && request.requestNumber !== undefined);
   return {
     id: review._id,
-    serviceRequestId: review.serviceRequestId,
+    serviceRequestId: populated ? request._id : request,
+    requestNumber: populated ? request.requestNumber : requestNumber,
     customerId: review.customerId,
     vendorId: review.vendorId,
     rating: review.rating,
@@ -61,7 +67,27 @@ class ReviewService {
 
     await Vendor.findByIdAndUpdate(request.vendorId, { averageRating, totalReviews });
 
-    return reviewMapper(review);
+    return reviewMapper(review, request.requestNumber);
+  }
+
+  // §8: the customer's own review of their own request. Someone else's request answers
+  // REQUEST_NOT_FOUND (never confirm it exists); their own with no review yet, REVIEW_NOT_FOUND.
+  async getReviewForRequest(customerId, requestId) {
+    const request = await ServiceRequest.findOne({ _id: requestId, isDeleted: { $ne: true } });
+    if (!request || String(request.customerId) !== String(customerId)) {
+      throw new ApiError(404, 'Service request not found.', null, ERROR_CODES.REQUEST_NOT_FOUND);
+    }
+
+    const review = await Review.findOne({
+      serviceRequestId: request._id,
+      customerId,
+      isDeleted: { $ne: true },
+    });
+    if (!review) {
+      throw new ApiError(404, 'No review for this request yet.', null, ERROR_CODES.REVIEW_NOT_FOUND);
+    }
+
+    return reviewMapper(review, request.requestNumber);
   }
 
   async getVendorReviews(vendorId, body = {}) {
@@ -73,11 +99,12 @@ class ReviewService {
         .skip(skip)
         .limit(limit)
         .sort({ createdAt: -1 })
-        .populate('customerId', 'firstName lastName profileImage'),
+        .populate('customerId', 'firstName lastName profileImage')
+        .populate('serviceRequestId', 'requestNumber'),
       Review.countDocuments(filter),
     ]);
 
-    const mapped = reviews.map(reviewMapper);
+    const mapped = reviews.map((review) => reviewMapper(review));
     const meta = getPaginationMetadata(total, page, limit);
 
     return { data: mapped, meta };

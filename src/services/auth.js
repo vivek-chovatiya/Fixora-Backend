@@ -1,17 +1,12 @@
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 const Customer = require('../models/customer');
 const Vendor = require('../models/vendor');
 const Admin = require('../models/admin');
 const customerService = require('./customer');
 const vendorService = require('./vendor');
+const { toSessionUser } = require('./session');
 const ApiError = require('../utils/ApiError');
-
-const generateToken = (payload) => {
-  const jwtSecret = process.env.JWT_SECRET || 'fixora_secret_key_change_in_production';
-  const jwtExpires = process.env.JWT_EXPIRES || '7d';
-  return jwt.sign(payload, jwtSecret, { expiresIn: jwtExpires });
-};
+const { generateToken } = require('../utils/token');
 
 class AuthService {
   async login(payload) {
@@ -33,7 +28,8 @@ class AuthService {
       );
     }
 
-    if (!user) {
+    // Phone-registered accounts have no password; they are refused like an unknown email.
+    if (!user || !user.password) {
       throw new ApiError(401, 'Invalid email or password.');
     }
 
@@ -46,7 +42,12 @@ class AuthService {
       throw new ApiError(403, 'Account is inactive or suspended.');
     }
 
-    const token = generateToken({ id: user._id, email: user.email, role });
+    const token = generateToken({
+      id: user._id,
+      email: user.email,
+      role,
+      v: user.tokenVersion || 0,
+    });
 
     return {
       user: {
@@ -81,10 +82,18 @@ class AuthService {
     };
   }
 
+  // The existing profile fields (which the web views read) plus the mobile session user's fields
+  // on top, so /auth/me returns the same `user` shape as a phone sign-in session for both roles.
   async getCurrentUser(userContext) {
     const { id, role } = userContext;
-    if (role === 'CUSTOMER') return customerService.getCustomerById(id);
-    if (role === 'VENDOR') return vendorService.getVendorById(id);
+    if (role === 'CUSTOMER') {
+      const profile = await customerService.getCustomerById(id);
+      return { ...profile, ...toSessionUser(profile, 'CUSTOMER') };
+    }
+    if (role === 'VENDOR') {
+      const profile = await vendorService.getVendorById(id);
+      return { ...profile, ...toSessionUser(profile, 'VENDOR') };
+    }
     if (role === 'ADMIN') return require('./admin').getAdminById(id);
 
     throw new ApiError(400, 'Invalid user role.');

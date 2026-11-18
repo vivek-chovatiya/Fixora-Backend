@@ -1,10 +1,12 @@
 const serviceRequestService = require('../services/servicerequest');
 const ApiResponse = require('../utils/ApiResponse');
 
+// Every method passes the signed-in user (`req.user`: { id, role }) so the service can decide
+// what this caller may see and change (requests contract §2–§5).
 class ServiceRequestController {
   async create(req, res, next) {
     try {
-      const request = await serviceRequestService.createRequest(req.user.id, req.body);
+      const request = await serviceRequestService.createRequest(req.user, req.body);
       return ApiResponse.created(res, 'Service request created successfully.', request);
     } catch (error) {
       next(error);
@@ -13,7 +15,7 @@ class ServiceRequestController {
 
   async accept(req, res, next) {
     try {
-      const request = await serviceRequestService.acceptRequest(req.body.id, req.user.id);
+      const request = await serviceRequestService.acceptRequest(req.body.id, req.user);
       return ApiResponse.success(res, 'Service request accepted successfully.', request);
     } catch (error) {
       next(error);
@@ -37,7 +39,7 @@ class ServiceRequestController {
     try {
       const request = await serviceRequestService.assignTeamMember(
         req.body.id,
-        req.user.id,
+        req.user,
         req.body.assignedTeamMemberId
       );
       return ApiResponse.success(
@@ -63,6 +65,19 @@ class ServiceRequestController {
     try {
       const request = await serviceRequestService.completeWork(req.body.id, req.user, req.body);
       return ApiResponse.success(res, 'Service work completed successfully.', request);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async cancel(req, res, next) {
+    try {
+      const request = await serviceRequestService.cancelRequest(
+        req.body.id,
+        req.user,
+        req.body.reason
+      );
+      return ApiResponse.success(res, 'Service request cancelled.', request);
     } catch (error) {
       next(error);
     }
