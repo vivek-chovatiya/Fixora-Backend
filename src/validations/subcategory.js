@@ -1,12 +1,12 @@
-const Joi = require('joi');
+const { Joi, objectId, pagination, idBody } = require('./common');
 
 const createSubCategory = {
   body: Joi.object({
-    categoryId: Joi.string().hex().length(24).required(),
-    name: Joi.string().trim().required(),
-    slug: Joi.string().trim().lowercase(),
-    icon: Joi.string().allow(null, ''),
-    description: Joi.string().trim().allow(''),
+    categoryId: objectId().required(),
+    name: Joi.string().trim().min(2).max(80).required(),
+    slug: Joi.string().trim().lowercase().max(80),
+    icon: Joi.string().trim().max(60).allow(null, ''),
+    description: Joi.string().trim().max(300).allow(''),
     estimatedDuration: Joi.number().integer().min(0).default(60),
     estimatedPrice: Joi.number().min(0).default(0),
     isVisible: Joi.boolean().default(true),
@@ -15,12 +15,12 @@ const createSubCategory = {
 
 const updateSubCategory = {
   body: Joi.object({
-    id: Joi.string().hex().length(24).required(),
-    categoryId: Joi.string().hex().length(24),
-    name: Joi.string().trim(),
-    slug: Joi.string().trim().lowercase(),
-    icon: Joi.string().allow(null, ''),
-    description: Joi.string().trim().allow(''),
+    id: objectId().required(),
+    categoryId: objectId(),
+    name: Joi.string().trim().min(2).max(80),
+    slug: Joi.string().trim().lowercase().max(80),
+    icon: Joi.string().trim().max(60).allow(null, ''),
+    description: Joi.string().trim().max(300).allow(''),
     estimatedDuration: Joi.number().integer().min(0),
     estimatedPrice: Joi.number().min(0),
     isVisible: Joi.boolean(),
@@ -30,23 +30,12 @@ const updateSubCategory = {
 
 const listSubCategories = {
   body: Joi.object({
-    categoryId: Joi.string().hex().length(24),
-    page: Joi.number().integer().min(1).default(1),
-    limit: Joi.number().integer().min(1).max(100).default(20),
-    search: Joi.string().trim().allow(''),
+    categoryId: objectId(),
+    ...pagination,
+    limit: Joi.number().integer().min(1).max(100).default(100),
+    search: Joi.string().trim().max(100).allow(''),
     status: Joi.string().valid('ACTIVE', 'INACTIVE'),
   }),
 };
 
-const getById = {
-  body: Joi.object({
-    id: Joi.string().hex().length(24).required(),
-  }),
-};
-
-module.exports = {
-  createSubCategory,
-  updateSubCategory,
-  listSubCategories,
-  getById,
-};
+module.exports = { createSubCategory, updateSubCategory, listSubCategories, getById: idBody };

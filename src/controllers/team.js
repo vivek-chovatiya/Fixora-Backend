@@ -1,51 +1,34 @@
 const teamService = require('../services/team');
 const ApiResponse = require('../utils/ApiResponse');
+const { wrapController } = require('../utils/asyncHandler');
 
 class TeamController {
-  async create(req, res, next) {
-    try {
-      const member = await teamService.createMember(req.user.id, req.body);
-      return ApiResponse.created(res, 'Team member added successfully.', member);
-    } catch (error) {
-      next(error);
-    }
+  async create(req, res) {
+    const member = await teamService.createMember(req.user.id, req.body);
+    return ApiResponse.created(res, 'Team member added successfully.', member);
   }
 
-  async getAll(req, res, next) {
-    try {
-      const members = await teamService.getVendorTeam(req.user.id);
-      return ApiResponse.success(res, 'Team members retrieved successfully.', members);
-    } catch (error) {
-      next(error);
-    }
+  async getAll(req, res) {
+    const members = await teamService.getVendorTeam(req.user.id);
+    return ApiResponse.success(res, 'Team members retrieved successfully.', members, {
+      total: members.length,
+    });
   }
 
-  async getById(req, res, next) {
-    try {
-      const member = await teamService.getMemberById(req.body.id, req.user.id);
-      return ApiResponse.success(res, 'Team member details retrieved successfully.', member);
-    } catch (error) {
-      next(error);
-    }
+  async getById(req, res) {
+    const member = await teamService.getMemberById(req.body.id, req.user.id);
+    return ApiResponse.success(res, 'Team member details retrieved successfully.', member);
   }
 
-  async update(req, res, next) {
-    try {
-      const member = await teamService.updateMember(req.body.id, req.user.id, req.body);
-      return ApiResponse.success(res, 'Team member profile updated successfully.', member);
-    } catch (error) {
-      next(error);
-    }
+  async update(req, res) {
+    const member = await teamService.updateMember(req.body.id, req.user.id, req.body);
+    return ApiResponse.success(res, 'Team member updated successfully.', member);
   }
 
-  async remove(req, res, next) {
-    try {
-      await teamService.deleteMember(req.body.id, req.user.id);
-      return ApiResponse.success(res, 'Team member deleted successfully.', null);
-    } catch (error) {
-      next(error);
-    }
+  async remove(req, res) {
+    await teamService.deleteMember(req.body.id, req.user.id);
+    return ApiResponse.success(res, 'Team member removed successfully.', null);
   }
 }
 
-module.exports = new TeamController();
+module.exports = wrapController(new TeamController());

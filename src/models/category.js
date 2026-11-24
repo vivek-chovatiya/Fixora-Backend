@@ -5,6 +5,7 @@ const categorySchema = new mongoose.Schema(
     name: { type: String, required: true, trim: true },
     slug: { type: String, required: true, unique: true, lowercase: true, trim: true, index: true },
     icon: { type: String, default: null },
+    image: { type: String, default: null },
     description: { type: String, default: '', trim: true },
     sortOrder: { type: Number, default: 0 },
     isVisible: { type: Boolean, default: true },
@@ -15,4 +16,4 @@ const categorySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model('Category', categorySchema);
+module.exports = mongoose.model('Category', categorySchema, 'categories');

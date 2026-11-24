@@ -1,0 +1,242 @@
+/**
+ * Platform-wide constants. Never hardcode these values elsewhere.
+ */
+
+const freezeValues = (obj) => Object.freeze(obj);
+const valuesOf = (obj) => Object.freeze(Object.values(obj));
+
+const ROLE = freezeValues({
+  CUSTOMER: 'CUSTOMER',
+  VENDOR: 'VENDOR',
+  ADMIN: 'ADMIN',
+});
+
+const RECORD_STATUS = freezeValues({
+  ACTIVE: 'ACTIVE',
+  INACTIVE: 'INACTIVE',
+  BLOCKED: 'BLOCKED',
+});
+
+const APPROVAL_STATUS = freezeValues({
+  PENDING: 'PENDING',
+  APPROVED: 'APPROVED',
+  REJECTED: 'REJECTED',
+});
+
+const TEAM_MEMBER_STATUS = freezeValues({
+  ACTIVE: 'ACTIVE',
+  INACTIVE: 'INACTIVE',
+  ON_LEAVE: 'ON_LEAVE',
+});
+
+/** Request lifecycle — PROJECT_BIBLE §10 / App PROJECT_BIBLE §21. */
+const REQUEST_STATUS = freezeValues({
+  CREATED: 'CREATED',
+  PENDING_VENDOR: 'PENDING_VENDOR',
+  ACCEPTED: 'ACCEPTED',
+  IN_PROGRESS: 'IN_PROGRESS',
+  COMPLETED: 'COMPLETED',
+  CLOSED: 'CLOSED',
+  REJECTED: 'REJECTED',
+  CANCELLED: 'CANCELLED',
+  ON_HOLD: 'ON_HOLD',
+});
+
+/** Requests still in flight — anything not yet closed, rejected or cancelled. */
+const ACTIVE_REQUEST_STATUSES = Object.freeze([
+  REQUEST_STATUS.CREATED,
+  REQUEST_STATUS.PENDING_VENDOR,
+  REQUEST_STATUS.ACCEPTED,
+  REQUEST_STATUS.IN_PROGRESS,
+  REQUEST_STATUS.ON_HOLD,
+]);
+
+/** Allowed transitions. Anything not listed here is forbidden. */
+const REQUEST_TRANSITIONS = freezeValues({
+  [REQUEST_STATUS.CREATED]: [REQUEST_STATUS.PENDING_VENDOR, REQUEST_STATUS.CANCELLED],
+  [REQUEST_STATUS.PENDING_VENDOR]: [
+    REQUEST_STATUS.ACCEPTED,
+    REQUEST_STATUS.CANCELLED,
+    REQUEST_STATUS.REJECTED,
+  ],
+  [REQUEST_STATUS.ACCEPTED]: [REQUEST_STATUS.IN_PROGRESS, REQUEST_STATUS.CANCELLED],
+  [REQUEST_STATUS.IN_PROGRESS]: [REQUEST_STATUS.COMPLETED, REQUEST_STATUS.ON_HOLD],
+  [REQUEST_STATUS.ON_HOLD]: [REQUEST_STATUS.IN_PROGRESS],
+  [REQUEST_STATUS.COMPLETED]: [REQUEST_STATUS.CLOSED],
+  [REQUEST_STATUS.CLOSED]: [],
+  [REQUEST_STATUS.REJECTED]: [],
+  [REQUEST_STATUS.CANCELLED]: [],
+});
+
+/** Human-friendly labels returned to clients so the app never invents copy for statuses. */
+const REQUEST_STATUS_LABEL = freezeValues({
+  CREATED: 'Created',
+  PENDING_VENDOR: 'Pending Vendor',
+  ACCEPTED: 'Accepted',
+  IN_PROGRESS: 'In Progress',
+  COMPLETED: 'Completed',
+  CLOSED: 'Closed',
+  REJECTED: 'Rejected',
+  CANCELLED: 'Cancelled',
+  ON_HOLD: 'On Hold',
+});
+
+const PRIORITY = freezeValues({
+  LOW: 'LOW',
+  MEDIUM: 'MEDIUM',
+  HIGH: 'HIGH',
+  EMERGENCY: 'EMERGENCY',
+});
+
+const PRIORITY_LABEL = freezeValues({
+  LOW: 'Low',
+  MEDIUM: 'Medium',
+  HIGH: 'High',
+  EMERGENCY: 'Emergency',
+});
+
+/** Routing, not status (App PROJECT_BIBLE §18A / §21). */
+const DISPATCH_MODE = freezeValues({
+  DIRECTED: 'DIRECTED',
+  OPEN: 'OPEN',
+});
+
+const PAYMENT_METHOD = freezeValues({
+  CASH: 'CASH',
+  UPI: 'UPI',
+  BANK_TRANSFER: 'BANK_TRANSFER',
+  CARD: 'CARD',
+  OTHER: 'OTHER',
+});
+
+const PAYMENT_METHOD_LABEL = freezeValues({
+  CASH: 'Cash',
+  UPI: 'UPI',
+  BANK_TRANSFER: 'Bank Transfer',
+  CARD: 'Card',
+  OTHER: 'Other',
+});
+
+const PAYMENT_STATUS = freezeValues({
+  PENDING: 'PENDING',
+  PAID: 'PAID',
+});
+
+const PAYMENT_STATUS_LABEL = freezeValues({
+  PENDING: 'Payment Pending',
+  PAID: 'Payment Recorded',
+});
+
+/** Vendor request-list views (App PROJECT_BIBLE §31). */
+const VENDOR_REQUEST_VIEW = freezeValues({
+  NEW: 'NEW',
+  ACCEPTED: 'ACCEPTED',
+  IN_PROGRESS: 'IN_PROGRESS',
+  COMPLETED: 'COMPLETED',
+  REJECTED: 'REJECTED',
+});
+
+/** Customer history filters (App PROJECT_BIBLE §23). */
+const CUSTOMER_REQUEST_VIEW = freezeValues({
+  ALL: 'ALL',
+  ACTIVE: 'ACTIVE',
+  COMPLETED: 'COMPLETED',
+  CANCELLED: 'CANCELLED',
+});
+
+const REPORT_PERIOD = freezeValues({
+  TODAY: 'TODAY',
+  WEEK: 'WEEK',
+  MONTH: 'MONTH',
+});
+
+/** Actions the backend tells the client are valid right now. */
+const REQUEST_ACTION = freezeValues({
+  ACCEPT: 'ACCEPT',
+  REJECT: 'REJECT',
+  START: 'START',
+  COMPLETE: 'COMPLETE',
+  ASSIGN_TEAM: 'ASSIGN_TEAM',
+  CANCEL: 'CANCEL',
+  REVIEW: 'REVIEW',
+});
+
+const UPLOAD_TYPE = freezeValues({
+  REQUEST: 'REQUEST',
+  PROFILE: 'PROFILE',
+  SHOP: 'SHOP',
+  DOCUMENT: 'DOCUMENT',
+  REVIEW: 'REVIEW',
+});
+
+const NOTIFICATION_TYPE = freezeValues({
+  GENERAL: 'GENERAL',
+  SERVICE_REQUEST: 'SERVICE_REQUEST',
+  REVIEW: 'REVIEW',
+  ACCOUNT: 'ACCOUNT',
+});
+
+/** Recommended-vendor ranking: `priorWeight` virtual reviews at `priorMean` stars. */
+const RATING_RANKING = freezeValues({
+  priorWeight: 5,
+  priorMean: 3.5,
+});
+
+/** Machine-readable error codes — frontend branches on these, never on messages. */
+const ERROR_CODE = freezeValues({
+  AUTH_REQUIRED: 'AUTH_REQUIRED',
+  TOKEN_EXPIRED: 'TOKEN_EXPIRED',
+  INVALID_CREDENTIALS: 'INVALID_CREDENTIALS',
+  ACCOUNT_INACTIVE: 'ACCOUNT_INACTIVE',
+  VALIDATION_FAILED: 'VALIDATION_FAILED',
+  RESOURCE_NOT_FOUND: 'RESOURCE_NOT_FOUND',
+  PERMISSION_DENIED: 'PERMISSION_DENIED',
+  DUPLICATE_RECORD: 'DUPLICATE_RECORD',
+  RESOURCE_IN_USE: 'RESOURCE_IN_USE',
+  INVALID_STATUS_TRANSITION: 'INVALID_STATUS_TRANSITION',
+  REQUEST_ALREADY_ASSIGNED: 'REQUEST_ALREADY_ASSIGNED',
+  VENDOR_NOT_APPROVED: 'VENDOR_NOT_APPROVED',
+  VENDOR_NOT_ELIGIBLE: 'VENDOR_NOT_ELIGIBLE',
+  REVIEW_NOT_ALLOWED: 'REVIEW_NOT_ALLOWED',
+  INVALID_RESET_CODE: 'INVALID_RESET_CODE',
+  RATE_LIMITED: 'RATE_LIMITED',
+  SERVER_ERROR: 'SERVER_ERROR',
+});
+
+module.exports = {
+  ROLE,
+  ROLES: valuesOf(ROLE),
+  RECORD_STATUS,
+  APPROVAL_STATUS,
+  APPROVAL_STATUSES: valuesOf(APPROVAL_STATUS),
+  TEAM_MEMBER_STATUS,
+  TEAM_MEMBER_STATUSES: valuesOf(TEAM_MEMBER_STATUS),
+  REQUEST_STATUS,
+  REQUEST_STATUSES: valuesOf(REQUEST_STATUS),
+  ACTIVE_REQUEST_STATUSES,
+  REQUEST_TRANSITIONS,
+  REQUEST_STATUS_LABEL,
+  PRIORITY,
+  PRIORITIES: valuesOf(PRIORITY),
+  PRIORITY_LABEL,
+  DISPATCH_MODE,
+  DISPATCH_MODES: valuesOf(DISPATCH_MODE),
+  PAYMENT_METHOD,
+  PAYMENT_METHODS: valuesOf(PAYMENT_METHOD),
+  PAYMENT_METHOD_LABEL,
+  PAYMENT_STATUS,
+  PAYMENT_STATUSES: valuesOf(PAYMENT_STATUS),
+  PAYMENT_STATUS_LABEL,
+  VENDOR_REQUEST_VIEW,
+  VENDOR_REQUEST_VIEWS: valuesOf(VENDOR_REQUEST_VIEW),
+  CUSTOMER_REQUEST_VIEW,
+  CUSTOMER_REQUEST_VIEWS: valuesOf(CUSTOMER_REQUEST_VIEW),
+  REPORT_PERIOD,
+  REPORT_PERIODS: valuesOf(REPORT_PERIOD),
+  REQUEST_ACTION,
+  UPLOAD_TYPE,
+  UPLOAD_TYPES: valuesOf(UPLOAD_TYPE),
+  NOTIFICATION_TYPE,
+  RATING_RANKING,
+  ERROR_CODE,
+};

@@ -1,12 +1,2 @@
-class ApiError extends Error {
-  constructor(statusCode, message, errors = null) {
-    super(message);
-    this.statusCode = statusCode;
-    this.success = false;
-    this.errors = errors;
-
-    Error.captureStackTrace(this, this.constructor);
-  }
-}
-
-module.exports = ApiError;
+// Single ApiError implementation lives in src/utils/ApiError.js.
+module.exports = require('../../utils/ApiError');

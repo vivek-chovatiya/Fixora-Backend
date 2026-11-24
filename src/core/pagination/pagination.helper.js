@@ -1,24 +1,2 @@
-const getPagination = (query) => {
-  const page = Math.max(1, parseInt(query.page) || 1);
-  const limit = Math.max(1, Math.min(100, parseInt(query.limit) || 20));
-  const skip = (page - 1) * limit;
-
-  return { page, limit, skip };
-};
-
-const getPaginationMetadata = (total, page, limit) => {
-  const pages = Math.ceil(total / limit);
-  return {
-    total,
-    page,
-    limit,
-    pages,
-    hasNextPage: page < pages,
-    hasPrevPage: page > 1,
-  };
-};
-
-module.exports = {
-  getPagination,
-  getPaginationMetadata,
-};
+// Single pagination implementation lives in src/utils/pagination.js.
+module.exports = require('../../utils/pagination');

@@ -1,33 +1,24 @@
-const Joi = require('joi');
+const { Joi, objectId, phone, uploadedPath, idBody } = require('./common');
+const { TEAM_MEMBER_STATUSES } = require('../constants');
 
 const createTeamMember = {
   body: Joi.object({
-    name: Joi.string().trim().required(),
-    phone: Joi.string().trim().required(),
-    designation: Joi.string().trim().default('Technician'),
-    profileImage: Joi.string().allow(null, ''),
+    name: Joi.string().trim().min(2).max(80).required(),
+    phone: phone().required(),
+    designation: Joi.string().trim().max(60).default('Technician'),
+    profileImage: uploadedPath().allow(null, ''),
   }),
 };
 
 const updateTeamMember = {
   body: Joi.object({
-    id: Joi.string().hex().length(24).required(),
-    name: Joi.string().trim(),
-    phone: Joi.string().trim(),
-    designation: Joi.string().trim(),
-    profileImage: Joi.string().allow(null, ''),
-    status: Joi.string().valid('ACTIVE', 'INACTIVE', 'ON_LEAVE'),
+    id: objectId().required(),
+    name: Joi.string().trim().min(2).max(80),
+    phone: phone(),
+    designation: Joi.string().trim().max(60),
+    profileImage: uploadedPath().allow(null, ''),
+    status: Joi.string().valid(...TEAM_MEMBER_STATUSES),
   }),
 };
 
-const getById = {
-  body: Joi.object({
-    id: Joi.string().hex().length(24).required(),
-  }),
-};
-
-module.exports = {
-  createTeamMember,
-  updateTeamMember,
-  getById,
-};
+module.exports = { createTeamMember, updateTeamMember, getById: idBody };

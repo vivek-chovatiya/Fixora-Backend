@@ -1,11 +1,12 @@
-const Joi = require('joi');
+const { Joi, objectId, uploadedPath, pagination, idBody } = require('./common');
 
 const createCategory = {
   body: Joi.object({
-    name: Joi.string().trim().required(),
-    slug: Joi.string().trim().lowercase(),
-    icon: Joi.string().allow(null, ''),
-    description: Joi.string().trim().allow(''),
+    name: Joi.string().trim().min(2).max(80).required(),
+    slug: Joi.string().trim().lowercase().max(80),
+    icon: Joi.string().trim().max(60).allow(null, ''),
+    image: uploadedPath().allow(null, ''),
+    description: Joi.string().trim().max(300).allow(''),
     sortOrder: Joi.number().integer().default(0),
     isVisible: Joi.boolean().default(true),
   }),
@@ -13,11 +14,12 @@ const createCategory = {
 
 const updateCategory = {
   body: Joi.object({
-    id: Joi.string().hex().length(24).required(),
-    name: Joi.string().trim(),
-    slug: Joi.string().trim().lowercase(),
-    icon: Joi.string().allow(null, ''),
-    description: Joi.string().trim().allow(''),
+    id: objectId().required(),
+    name: Joi.string().trim().min(2).max(80),
+    slug: Joi.string().trim().lowercase().max(80),
+    icon: Joi.string().trim().max(60).allow(null, ''),
+    image: uploadedPath().allow(null, ''),
+    description: Joi.string().trim().max(300).allow(''),
     sortOrder: Joi.number().integer(),
     isVisible: Joi.boolean(),
     status: Joi.string().valid('ACTIVE', 'INACTIVE'),
@@ -26,22 +28,11 @@ const updateCategory = {
 
 const listCategories = {
   body: Joi.object({
-    page: Joi.number().integer().min(1).default(1),
-    limit: Joi.number().integer().min(1).max(100).default(20),
-    search: Joi.string().trim().allow(''),
+    ...pagination,
+    limit: Joi.number().integer().min(1).max(100).default(100),
+    search: Joi.string().trim().max(100).allow(''),
     status: Joi.string().valid('ACTIVE', 'INACTIVE'),
   }),
 };
 
-const getById = {
-  body: Joi.object({
-    id: Joi.string().hex().length(24).required(),
-  }),
-};
-
-module.exports = {
-  createCategory,
-  updateCategory,
-  listCategories,
-  getById,
-};
+module.exports = { createCategory, updateCategory, listCategories, getById: idBody };

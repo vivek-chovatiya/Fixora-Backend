@@ -10,6 +10,12 @@ const vendorSchema = new mongoose.Schema(
     categoryIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Category' }],
     address: { type: String, required: true, trim: true },
     description: { type: String, default: '' },
+    workingAreas: [{ type: String, trim: true }],
+    workingHours: { type: String, default: '', trim: true },
+    approvalNote: { type: String, default: '' },
+    lastLogin: { type: Date, default: null },
+    resetCodeHash: { type: String, default: null, select: false },
+    resetCodeExpiresAt: { type: Date, default: null, select: false },
     profileImage: { type: String, default: null },
     shopImages: [{ type: String }],
     documents: [{ type: String }],
@@ -24,4 +30,6 @@ const vendorSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model('Vendor', vendorSchema);
+vendorSchema.index({ approvalStatus: 1, status: 1, availability: 1, categoryIds: 1 });
+
+module.exports = mongoose.model('Vendor', vendorSchema, 'vendors');

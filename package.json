@@ -6,6 +6,9 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
+    "seed": "node src/utils/seed.js",
+    "migrate:phones": "node src/utils/migrate-phones.js",
+    "test": "node --test --test-concurrency=1 tests/*.test.js",
     "format": "prettier --write \"src/**/*.js\"",
     "lint": "eslint \"src/**/*.js\""
   },
@@ -14,6 +17,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "express-rate-limit": "^7.5.0",
     "helmet": "^7.1.0",
     "joi": "^17.13.1",
     "jsonwebtoken": "^9.0.3",

@@ -1,42 +1,32 @@
-const Joi = require('joi');
+const { Joi, objectId, idBody } = require('./common');
+
+const fields = {
+  title: Joi.string().trim().max(40),
+  addressLine1: Joi.string().trim().min(3).max(200),
+  addressLine2: Joi.string().trim().max(200).allow(''),
+  city: Joi.string().trim().min(2).max(80),
+  state: Joi.string().trim().min(2).max(80),
+  pincode: Joi.string()
+    .trim()
+    .pattern(/^[0-9A-Za-z -]{4,10}$/)
+    .messages({ 'string.pattern.base': 'Enter a valid postal code.' }),
+  latitude: Joi.number().min(-90).max(90).allow(null),
+  longitude: Joi.number().min(-180).max(180).allow(null),
+  isDefault: Joi.boolean(),
+};
 
 const createAddress = {
   body: Joi.object({
-    title: Joi.string().trim().default('Home'),
-    addressLine1: Joi.string().trim().required(),
-    addressLine2: Joi.string().trim().allow(''),
-    city: Joi.string().trim().required(),
-    state: Joi.string().trim().required(),
-    pincode: Joi.string().trim().required(),
-    latitude: Joi.number().allow(null),
-    longitude: Joi.number().allow(null),
-    isDefault: Joi.boolean().default(false),
+    ...fields,
+    title: fields.title.default('Home'),
+    addressLine1: fields.addressLine1.required(),
+    city: fields.city.required(),
+    state: fields.state.required(),
+    pincode: fields.pincode.required(),
+    isDefault: fields.isDefault.default(false),
   }),
 };
 
-const updateAddress = {
-  body: Joi.object({
-    id: Joi.string().hex().length(24).required(),
-    title: Joi.string().trim(),
-    addressLine1: Joi.string().trim(),
-    addressLine2: Joi.string().trim().allow(''),
-    city: Joi.string().trim(),
-    state: Joi.string().trim(),
-    pincode: Joi.string().trim(),
-    latitude: Joi.number().allow(null),
-    longitude: Joi.number().allow(null),
-    isDefault: Joi.boolean(),
-  }),
-};
+const updateAddress = { body: Joi.object({ id: objectId().required(), ...fields }) };
 
-const getById = {
-  body: Joi.object({
-    id: Joi.string().hex().length(24).required(),
-  }),
-};
-
-module.exports = {
-  createAddress,
-  updateAddress,
-  getById,
-};
+module.exports = { createAddress, updateAddress, getById: idBody };

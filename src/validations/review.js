@@ -1,30 +1,18 @@
-const Joi = require('joi');
+const { Joi, objectId, uploadedPath, pagination } = require('./common');
 
 const createReview = {
   body: Joi.object({
-    serviceRequestId: Joi.string().hex().length(24).required(),
+    serviceRequestId: objectId().required(),
     rating: Joi.number().integer().min(1).max(5).required(),
-    comment: Joi.string().trim().allow(''),
-    images: Joi.array().items(Joi.string()).optional(),
+    comment: Joi.string().trim().max(1000).allow(''),
+    images: Joi.array().items(uploadedPath()).max(5),
   }),
 };
 
 const listVendorReviews = {
-  body: Joi.object({
-    vendorId: Joi.string().hex().length(24).required(),
-    page: Joi.number().integer().min(1).default(1),
-    limit: Joi.number().integer().min(1).max(100).default(20),
-  }),
+  body: Joi.object({ vendorId: objectId(), ...pagination }),
 };
 
-const getById = {
-  body: Joi.object({
-    id: Joi.string().hex().length(24).required(),
-  }),
-};
+const vendorSummary = { body: Joi.object({ vendorId: objectId() }) };
 
-module.exports = {
-  createReview,
-  listVendorReviews,
-  getById,
-};
+module.exports = { createReview, listVendorReviews, vendorSummary };

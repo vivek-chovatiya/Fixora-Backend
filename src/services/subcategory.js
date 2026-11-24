@@ -1,22 +1,20 @@
 const SubCategory = require('../models/subcategory');
-const Category = require('../models/category');
 const ApiError = require('../utils/ApiError');
+const categoryService = require('./category');
+const { RECORD_STATUS } = require('../constants');
 const { getPagination, getPaginationMetadata } = require('../utils/pagination');
-
-const generateSlug = (name) => {
-  return name
-    .toLowerCase()
-    .trim()
-    .replace(/[^\w\s-]/g, '')
-    .replace(/[\s_-]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-};
+const { generateSlug, escapeRegex } = require('../utils/text');
 
 const subCategoryMapper = (subCategory) => {
   if (!subCategory) return null;
+  const category =
+    subCategory.categoryId && subCategory.categoryId._id
+      ? { id: subCategory.categoryId._id, name: subCategory.categoryId.name }
+      : null;
   return {
     id: subCategory._id,
-    categoryId: subCategory.categoryId,
+    categoryId: category ? category.id : subCategory.categoryId,
+    category,
     name: subCategory.name,
     slug: subCategory.slug,
     icon: subCategory.icon,
@@ -30,12 +28,15 @@ const subCategoryMapper = (subCategory) => {
   };
 };
 
+const PUBLIC_FILTER = Object.freeze({
+  isVisible: true,
+  status: RECORD_STATUS.ACTIVE,
+  isDeleted: { $ne: true },
+});
+
 class SubCategoryService {
   async createSubCategory(payload) {
-    const category = await Category.findOne({ _id: payload.categoryId, isDeleted: { $ne: true } });
-    if (!category) {
-      throw new ApiError(404, 'Parent category not found.');
-    }
+    await categoryService.getCategoryById(payload.categoryId);
 
     const slug = payload.slug || generateSlug(payload.name);
     const existing = await SubCategory.findOne({
@@ -62,19 +63,30 @@ class SubCategoryService {
     return subCategoryMapper(subCategory);
   }
 
-  async getAllSubCategories(body = {}) {
+  /** Throws unless the sub-category is offered to customers and belongs to the category. */
+  async assertPublicSubCategoryInCategory(subCategoryId, categoryId) {
+    const subCategory = await SubCategory.findOne({ _id: subCategoryId, ...PUBLIC_FILTER });
+    if (!subCategory || subCategory.categoryId.toString() !== categoryId.toString()) {
+      throw new ApiError(400, 'Selected service is not available in this category.', [
+        { field: 'subCategoryId', message: 'Selected service is not available in this category.' },
+      ]);
+    }
+    return subCategory;
+  }
+
+  async getAllSubCategories(body = {}, { includeHidden = false } = {}) {
     const { page, limit, skip } = getPagination(body);
-    const filter = { isDeleted: { $ne: true } };
+    const filter = includeHidden ? { isDeleted: { $ne: true } } : { ...PUBLIC_FILTER };
 
     if (body.categoryId) {
       filter.categoryId = body.categoryId;
     }
 
     if (body.search) {
-      filter.name = { $regex: body.search, $options: 'i' };
+      filter.name = { $regex: escapeRegex(body.search), $options: 'i' };
     }
 
-    if (body.status) {
+    if (includeHidden && body.status) {
       filter.status = body.status;
     }
 
@@ -83,10 +95,10 @@ class SubCategoryService {
       SubCategory.countDocuments(filter),
     ]);
 
-    const mapped = subCategories.map(subCategoryMapper);
-    const meta = getPaginationMetadata(total, page, limit);
-
-    return { data: mapped, meta };
+    return {
+      data: subCategories.map(subCategoryMapper),
+      meta: getPaginationMetadata(total, page, limit),
+    };
   }
 
   async updateSubCategory(id, payload) {
@@ -95,14 +107,21 @@ class SubCategoryService {
       throw new ApiError(404, 'Sub-category not found.');
     }
 
-    if (payload.name && !payload.slug) {
-      payload.slug = generateSlug(payload.name);
+    const update = { ...payload };
+    delete update.id;
+
+    if (update.categoryId) {
+      await categoryService.getCategoryById(update.categoryId);
     }
 
-    const categoryId = payload.categoryId || subCategory.categoryId;
-    if (payload.slug && payload.slug !== subCategory.slug) {
+    if (update.name && !update.slug) {
+      update.slug = generateSlug(update.name);
+    }
+
+    const categoryId = update.categoryId || subCategory.categoryId;
+    if (update.slug && update.slug !== subCategory.slug) {
       const existing = await SubCategory.findOne({
-        slug: payload.slug,
+        slug: update.slug,
         categoryId,
         isDeleted: { $ne: true },
       });
@@ -111,7 +130,7 @@ class SubCategoryService {
       }
     }
 
-    const updated = await SubCategory.findByIdAndUpdate(id, payload, { new: true });
+    const updated = await SubCategory.findByIdAndUpdate(id, update, { new: true });
     return subCategoryMapper(updated);
   }
 
@@ -120,6 +139,7 @@ class SubCategoryService {
     if (!subCategory) {
       throw new ApiError(404, 'Sub-category not found.');
     }
+    await categoryService.assertNoActiveRequests({ subCategoryId: id }, 'sub-category');
     await SubCategory.findByIdAndUpdate(id, { isDeleted: true, deletedAt: new Date() });
     return true;
   }

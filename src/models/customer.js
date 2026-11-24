@@ -11,6 +11,8 @@ const customerSchema = new mongoose.Schema(
     defaultAddress: { type: mongoose.Schema.Types.ObjectId, ref: 'Address', default: null },
     isVerified: { type: Boolean, default: false },
     lastLogin: { type: Date, default: null },
+    resetCodeHash: { type: String, default: null, select: false },
+    resetCodeExpiresAt: { type: Date, default: null, select: false },
     status: { type: String, enum: ['ACTIVE', 'INACTIVE', 'BLOCKED'], default: 'ACTIVE' },
     isDeleted: { type: Boolean, default: false, index: true },
     deletedAt: { type: Date, default: null },
@@ -18,4 +20,4 @@ const customerSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model('Customer', customerSchema);
+module.exports = mongoose.model('Customer', customerSchema, 'customers');

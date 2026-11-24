@@ -10,4 +10,6 @@ PROJECT_BIBLE.md
 README.md
 TODO.md
 postman/
-src/logs/
+src/logs/logs/
+logs/
+uploads/

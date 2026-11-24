@@ -6,7 +6,6 @@ const reviewSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'ServiceRequest',
       required: true,
-      index: true,
     },
     customerId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -25,4 +24,10 @@ const reviewSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model('Review', reviewSchema);
+// One request = one review (PROJECT_BIBLE §11.7).
+reviewSchema.index(
+  { serviceRequestId: 1 },
+  { unique: true, partialFilterExpression: { isDeleted: false } }
+);
+
+module.exports = mongoose.model('Review', reviewSchema, 'reviews');

@@ -1,90 +1,56 @@
 const serviceRequestService = require('../services/servicerequest');
 const ApiResponse = require('../utils/ApiResponse');
+const { wrapController } = require('../utils/asyncHandler');
 
 class ServiceRequestController {
-  async create(req, res, next) {
-    try {
-      const request = await serviceRequestService.createRequest(req.user.id, req.body);
-      return ApiResponse.created(res, 'Service request created successfully.', request);
-    } catch (error) {
-      next(error);
-    }
+  async create(req, res) {
+    const request = await serviceRequestService.createRequest(req.user.id, req.body);
+    return ApiResponse.created(res, 'Service request created successfully.', request);
   }
 
-  async accept(req, res, next) {
-    try {
-      const request = await serviceRequestService.acceptRequest(req.body.id, req.user.id);
-      return ApiResponse.success(res, 'Service request accepted successfully.', request);
-    } catch (error) {
-      next(error);
-    }
+  async getAll(req, res) {
+    const { data, meta } = await serviceRequestService.getAllRequests(req.body, req.user);
+    return ApiResponse.success(res, 'Service requests retrieved successfully.', data, meta);
   }
 
-  async reject(req, res, next) {
-    try {
-      const request = await serviceRequestService.rejectRequest(
-        req.body.id,
-        req.user,
-        req.body.note
-      );
-      return ApiResponse.success(res, 'Service request rejected successfully.', request);
-    } catch (error) {
-      next(error);
-    }
+  async getById(req, res) {
+    const request = await serviceRequestService.getRequestById(req.body.id, req.user);
+    return ApiResponse.success(res, 'Service request retrieved successfully.', request);
   }
 
-  async assignTeam(req, res, next) {
-    try {
-      const request = await serviceRequestService.assignTeamMember(
-        req.body.id,
-        req.user.id,
-        req.body.assignedTeamMemberId
-      );
-      return ApiResponse.success(
-        res,
-        'Service request assigned to technician successfully.',
-        request
-      );
-    } catch (error) {
-      next(error);
-    }
+  async accept(req, res) {
+    const request = await serviceRequestService.acceptRequest(req.body.id, req.user.id);
+    return ApiResponse.success(res, 'Request accepted. It is now assigned to you.', request);
   }
 
-  async startWork(req, res, next) {
-    try {
-      const request = await serviceRequestService.startWork(req.body.id, req.user);
-      return ApiResponse.success(res, 'Service work started successfully.', request);
-    } catch (error) {
-      next(error);
-    }
+  async reject(req, res) {
+    const request = await serviceRequestService.rejectRequest(req.body.id, req.user, req.body.reason);
+    return ApiResponse.success(res, 'Request declined.', request);
   }
 
-  async completeWork(req, res, next) {
-    try {
-      const request = await serviceRequestService.completeWork(req.body.id, req.user, req.body);
-      return ApiResponse.success(res, 'Service work completed successfully.', request);
-    } catch (error) {
-      next(error);
-    }
+  async cancel(req, res) {
+    const request = await serviceRequestService.cancelRequest(req.body.id, req.user, req.body.reason);
+    return ApiResponse.success(res, 'Request cancelled.', request);
   }
 
-  async getById(req, res, next) {
-    try {
-      const request = await serviceRequestService.getRequestById(req.body.id, req.user);
-      return ApiResponse.success(res, 'Service request details retrieved successfully.', request);
-    } catch (error) {
-      next(error);
-    }
+  async assignTeam(req, res) {
+    const request = await serviceRequestService.assignTeamMember(
+      req.body.id,
+      req.user.id,
+      req.body.assignedTeamMemberId
+    );
+    return ApiResponse.success(res, 'Team member assigned.', request);
   }
 
-  async getAll(req, res, next) {
-    try {
-      const { data, meta } = await serviceRequestService.getAllRequests(req.body, req.user);
-      return ApiResponse.success(res, 'Service requests retrieved successfully.', data, meta);
-    } catch (error) {
-      next(error);
-    }
+  async startWork(req, res) {
+    const request = await serviceRequestService.startWork(req.body.id, req.user.id);
+    return ApiResponse.success(res, 'Work started.', request);
+  }
+
+  async completeWork(req, res) {
+    const request = await serviceRequestService.completeWork(req.body.id, req.user.id, req.body);
+    return ApiResponse.success(res, 'Work completed and payment recorded.', request);
   }
 }
 
-module.exports = new ServiceRequestController();
+module.exports = wrapController(new ServiceRequestController());

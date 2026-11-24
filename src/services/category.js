@@ -1,15 +1,25 @@
 const Category = require('../models/category');
+const ServiceRequest = require('../models/servicerequest');
 const ApiError = require('../utils/ApiError');
-const { getPagination, getPaginationMetadata } = require('../utils/pagination');
+const { RECORD_STATUS, ACTIVE_REQUEST_STATUSES, ERROR_CODE } = require('../constants');
 
-const generateSlug = (name) => {
-  return name
-    .toLowerCase()
-    .trim()
-    .replace(/[^\w\s-]/g, '')
-    .replace(/[\s_-]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+/**
+ * Catalog entries with work in flight cannot be deleted — customers and vendors
+ * would lose the service their open request belongs to. Hiding is the safe option.
+ */
+const assertNoActiveRequests = async (filter, label) => {
+  const inUse = await ServiceRequest.exists({ ...filter, status: { $in: ACTIVE_REQUEST_STATUSES }, isDeleted: { $ne: true } });
+  if (inUse) {
+    throw new ApiError(
+      409,
+      `This ${label} has active service requests. Hide it instead, or delete it after those requests are finished.`,
+      null,
+      ERROR_CODE.RESOURCE_IN_USE
+    );
+  }
 };
+const { getPagination, getPaginationMetadata } = require('../utils/pagination');
+const { generateSlug, escapeRegex } = require('../utils/text');
 
 const categoryMapper = (category) => {
   if (!category) return null;
@@ -18,6 +28,7 @@ const categoryMapper = (category) => {
     name: category.name,
     slug: category.slug,
     icon: category.icon,
+    image: category.image,
     description: category.description,
     sortOrder: category.sortOrder,
     isVisible: category.isVisible,
@@ -26,6 +37,13 @@ const categoryMapper = (category) => {
     updatedAt: category.updatedAt,
   };
 };
+
+/** What the customer app is allowed to see (PROJECT_BIBLE §11.5). */
+const PUBLIC_FILTER = Object.freeze({
+  isVisible: true,
+  status: RECORD_STATUS.ACTIVE,
+  isDeleted: { $ne: true },
+});
 
 class CategoryService {
   async createCategory(payload) {
@@ -47,15 +65,35 @@ class CategoryService {
     return categoryMapper(category);
   }
 
-  async getAllCategories(body = {}) {
+  /** Throws unless the category exists and is offered to customers. */
+  async assertPublicCategory(id) {
+    const category = await Category.findOne({ _id: id, ...PUBLIC_FILTER });
+    if (!category) {
+      throw new ApiError(404, 'Selected service category is not available.');
+    }
+    return category;
+  }
+
+  async assertCategoriesExist(ids = []) {
+    if (!ids.length) return;
+    const uniqueIds = [...new Set(ids.map(String))];
+    const count = await Category.countDocuments({ _id: { $in: uniqueIds }, isDeleted: { $ne: true } });
+    if (count !== uniqueIds.length) {
+      throw new ApiError(400, 'One or more selected service categories are invalid.', [
+        { field: 'categoryIds', message: 'One or more selected service categories are invalid.' },
+      ]);
+    }
+  }
+
+  async getAllCategories(body = {}, { includeHidden = false } = {}) {
     const { page, limit, skip } = getPagination(body);
-    const filter = { isDeleted: { $ne: true } };
+    const filter = includeHidden ? { isDeleted: { $ne: true } } : { ...PUBLIC_FILTER };
 
     if (body.search) {
-      filter.name = { $regex: body.search, $options: 'i' };
+      filter.name = { $regex: escapeRegex(body.search), $options: 'i' };
     }
 
-    if (body.status) {
+    if (includeHidden && body.status) {
       filter.status = body.status;
     }
 
@@ -64,10 +102,7 @@ class CategoryService {
       Category.countDocuments(filter),
     ]);
 
-    const mapped = categories.map(categoryMapper);
-    const meta = getPaginationMetadata(total, page, limit);
-
-    return { data: mapped, meta };
+    return { data: categories.map(categoryMapper), meta: getPaginationMetadata(total, page, limit) };
   }
 
   async updateCategory(id, payload) {
@@ -76,18 +111,21 @@ class CategoryService {
       throw new ApiError(404, 'Category not found.');
     }
 
-    if (payload.name && !payload.slug) {
-      payload.slug = generateSlug(payload.name);
+    const update = { ...payload };
+    delete update.id;
+
+    if (update.name && !update.slug) {
+      update.slug = generateSlug(update.name);
     }
 
-    if (payload.slug && payload.slug !== category.slug) {
-      const existing = await Category.findOne({ slug: payload.slug, isDeleted: { $ne: true } });
+    if (update.slug && update.slug !== category.slug) {
+      const existing = await Category.findOne({ slug: update.slug, isDeleted: { $ne: true } });
       if (existing) {
         throw new ApiError(409, 'Category with this slug already exists.');
       }
     }
 
-    const updated = await Category.findByIdAndUpdate(id, payload, { new: true });
+    const updated = await Category.findByIdAndUpdate(id, update, { new: true });
     return categoryMapper(updated);
   }
 
@@ -96,9 +134,12 @@ class CategoryService {
     if (!category) {
       throw new ApiError(404, 'Category not found.');
     }
+    await assertNoActiveRequests({ categoryId: id }, 'category');
     await Category.findByIdAndUpdate(id, { isDeleted: true, deletedAt: new Date() });
     return true;
   }
 }
 
 module.exports = new CategoryService();
+module.exports.categoryMapper = categoryMapper;
+module.exports.assertNoActiveRequests = assertNoActiveRequests;
