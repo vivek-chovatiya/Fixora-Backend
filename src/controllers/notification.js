@@ -19,6 +19,15 @@ class NotificationController {
       next(error);
     }
   }
+
+  async remove(req, res, next) {
+    try {
+      await notificationService.deleteNotification(req.body.id, req.user);
+      return ApiResponse.success(res, 'Notification deleted.', null);
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 module.exports = new NotificationController();

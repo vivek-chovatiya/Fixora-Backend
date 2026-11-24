@@ -21,7 +21,8 @@
     ],
     "testTimeout": 30000,
     "setupFilesAfterEnv": [
-      "<rootDir>/tests/setup/noSecrets.js"
+      "<rootDir>/tests/setup/noSecrets.js",
+      "<rootDir>/tests/setup/uploads.js"
     ]
   },
   "dependencies": {
@@ -35,6 +36,7 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^8.4.0",
     "multer": "^2.2.0",
+    "sharp": "^0.35.5",
     "winston": "^3.13.0"
   },
   "devDependencies": {

@@ -1,6 +1,19 @@
 const mongoose = require('mongoose');
 const { normalisePhone } = require('../utils/phone');
 const hideSecrets = require('../utils/hideSecrets');
+const { VENDOR_WORKING_DAYS } = require('../config/workingHours');
+
+// One day of the vendor's working week (Phase 4B contract §6). A closed day is stored without
+// times; an open day closes later than it opens (HH:mm, checked in validations/vendor.js).
+const workingDaySchema = new mongoose.Schema(
+  {
+    day: { type: String, enum: VENDOR_WORKING_DAYS, required: true },
+    isOpen: { type: Boolean, required: true },
+    opensAt: { type: String },
+    closesAt: { type: String },
+  },
+  { _id: false }
+);
 
 // Vendors arrive two ways: the email/password register route (web views) and the mobile phone
 // registration, which creates the vendor only when they confirm their permanent auth code
@@ -41,6 +54,8 @@ const vendorSchema = new mongoose.Schema(
     totalReviews: { type: Number, default: 0 },
     approvalStatus: { type: String, enum: ['PENDING', 'APPROVED', 'REJECTED'], default: 'PENDING' },
     availability: { type: Boolean, default: true },
+    // [] until the vendor first sets it, then the seven days Monday first. Information only.
+    workingHours: { type: [workingDaySchema], default: [] },
     status: { type: String, enum: ['ACTIVE', 'INACTIVE', 'BLOCKED'], default: 'ACTIVE' },
     isDeleted: { type: Boolean, default: false, index: true },
     deletedAt: { type: Date, default: null },

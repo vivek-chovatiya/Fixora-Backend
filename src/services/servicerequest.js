@@ -7,25 +7,34 @@ const TeamMember = require('../models/team');
 const Vendor = require('../models/vendor');
 const Notification = require('../models/notification');
 const ApiError = require('../utils/ApiError');
+const clock = require('../utils/clock');
 const logger = require('../utils/logger');
 const { ERROR_CODES } = require('../utils/errorCodes');
+const { indiaInstant } = require('../utils/indiaTime');
 const { getPagination, getPaginationMetadata } = require('../utils/pagination');
+const { PAYMENT_METHODS, paymentMethodById } = require('../config/paymentMethods');
+const { resolveImageField } = require('./uploadAttach');
 const {
   HELD_STATUSES,
   canSee,
   declinedBy,
+  idOf,
   offersCategory,
+  preferredFromScheduledAt,
   presentRequest,
   sameId,
 } = require('./requestview');
 
-// Service requests to the requests contract (lead, 17/11/2026) and PROJECT_BIBLE.md sections
-// 20–24 and 31–36: who may see what (services/requestview.js), first-accept-wins, per-vendor
-// decline of broadcast requests, holder-only start/complete, customer cancel until accepted, and a
-// create that records only what the customer actually gave.
+// Service requests to the requests contract (lead, 17/11/2026), the Phase 4B contract
+// (24/11/2026) and PROJECT_BIBLE.md sections 16, 20–24 and 31–37: who may see what
+// (services/requestview.js), first-accept-wins, per-vendor decline of broadcast requests,
+// holder-only start/complete, the offline payment record and its one later "paid", customer cancel
+// until accepted, and a create that records only what the customer actually gave.
 //
 // ⚠️ Every status change is one conditional findOneAndUpdate on the state it starts from. Never
-// read-check-then-write: two vendors pressing Accept together must produce exactly one winner.
+// read-check-then-write: two vendors pressing Accept together must produce exactly one winner,
+// and two "Paid" presses exactly one record. Times written here come from utils/clock.js so the
+// reports' tests can fix them.
 
 const DETAIL_POPULATE = 'customerId vendorId categoryId subCategoryId assignedTeamMemberId addressId';
 const LIST_POPULATE = 'customerId vendorId categoryId subCategoryId';
@@ -71,6 +80,14 @@ const notCancellable = () =>
     ERROR_CODES.REQUEST_NOT_CANCELLABLE
   );
 
+const paymentAlreadyRecorded = () =>
+  new ApiError(
+    409,
+    'This payment has already been recorded as paid.',
+    null,
+    ERROR_CODES.PAYMENT_ALREADY_RECORDED
+  );
+
 const fieldInvalid = (field, message) =>
   new ApiError(400, 'Validation Failed', [{ field, message }], ERROR_CODES.VALIDATION_FAILED);
 
@@ -84,11 +101,122 @@ const composeAddress = (address) =>
     .filter(Boolean)
     .join(', ');
 
+// The words of every notification a request change sends (Phase 4B §8): plain and factual, no
+// emoji, nothing beyond what happened. `business` is null when the vendor's name cannot be read.
+const theProfessional = (business, { start = false } = {}) =>
+  business || (start ? 'Your professional' : 'your professional');
+
+const MESSAGES = Object.freeze({
+  createdDirected: {
+    title: 'Request received',
+    body: ({ service, ref, business }) =>
+      `We have received your ${service} request ${ref} and sent it to ${theProfessional(business)}.`,
+  },
+  createdOpen: {
+    title: 'Request received',
+    body: ({ service, ref }) =>
+      `We have received your ${service} request ${ref}. We will let you know when a professional accepts it.`,
+  },
+  accepted: {
+    title: 'Request accepted',
+    body: ({ service, ref, business }) =>
+      `${theProfessional(business, { start: true })} accepted your ${service} request ${ref}.`,
+  },
+  rejected: {
+    title: 'Request not accepted',
+    body: ({ service, ref, business }) =>
+      `${theProfessional(business, { start: true })} did not accept your ${service} request ${ref}.`,
+  },
+  assigned: {
+    title: 'Team member assigned',
+    body: ({ service, ref, business }) =>
+      `${theProfessional(business, { start: true })} assigned a team member to your ${service} request ${ref}.`,
+  },
+  started: {
+    title: 'Work started',
+    body: ({ service, ref, business }) =>
+      `${theProfessional(business, { start: true })} started work on your ${service} request ${ref}.`,
+  },
+  completed: {
+    title: 'Work completed',
+    body: ({ service, ref, business }) =>
+      `${theProfessional(business, { start: true })} marked your ${service} request ${ref} as complete. You can now rate the work.`,
+  },
+  cancelled: {
+    title: 'Request cancelled',
+    body: ({ service, ref }) => `The customer cancelled their ${service} request ${ref}.`,
+  },
+});
+
+// What the words name: the sub-category, else the category; the vendor's business name. A name
+// that cannot be read falls back rather than costing the notification.
+const describeRequest = async (request) => {
+  const nameOf = (query) => query.lean().catch(() => null);
+  const [subCategory, category, vendor] = await Promise.all([
+    request.subCategoryId
+      ? nameOf(SubCategory.findById(idOf(request.subCategoryId)).select('name'))
+      : null,
+    nameOf(Category.findById(idOf(request.categoryId)).select('name')),
+    request.vendorId
+      ? nameOf(Vendor.findById(idOf(request.vendorId)).select('businessName'))
+      : null,
+  ]);
+  return {
+    ref: request.requestNumber,
+    service: (subCategory && subCategory.name) || (category && category.name) || 'service',
+    business: (vendor && vendor.businessName) || null,
+  };
+};
+
 // A notification is a courtesy; failing to save one must not undo the change it describes.
-const notify = (payload) =>
-  Notification.create(payload).catch((error) => {
+const notify = async (request, recipient, message) => {
+  try {
+    const words = await describeRequest(request);
+    await Notification.create({
+      userId: recipient.userId,
+      userRole: recipient.userRole,
+      title: message.title,
+      message: message.body(words),
+      type: 'SERVICE_REQUEST',
+      referenceId: request._id,
+    });
+  } catch (error) {
     logger.warn(`notification not saved: ${error.name}`);
-  });
+  }
+};
+
+const toCustomer = (request) => ({ userId: request.customerId, userRole: 'CUSTOMER' });
+
+// §3 (Phase 4B): the preferred date and time as sent, and scheduledAt derived from them for the
+// web views; a body with only scheduledAt (a web view) gets the pair derived from it instead.
+// "Sent" means the key is there — `null` or "" is a choice of none, not an absence.
+const scheduleOf = (payload) => {
+  if (payload.preferredDate !== undefined || payload.preferredTime !== undefined) {
+    const preferredDate = payload.preferredDate || null;
+    const preferredTime = payload.preferredTime || null;
+    return {
+      preferredDate,
+      preferredTime,
+      scheduledAt: preferredDate ? indiaInstant(preferredDate, preferredTime || '00:00') : null,
+    };
+  }
+  const scheduledAt = payload.scheduledAt || null;
+  return { ...preferredFromScheduledAt(scheduledAt), scheduledAt };
+};
+
+// §4 (Phase 4B): the payment record a completion with an amount writes. PAID carries the
+// configured method and the time; PENDING ("not paid yet") leaves paymentMode untouched.
+const paymentRecordOf = (payload, at) => {
+  const method =
+    payload.paymentStatus === 'PAID' ? paymentMethodById(payload.paymentMethodId) : null;
+  return {
+    currency: 'INR',
+    paymentStatus: method ? 'PAID' : 'PENDING',
+    completionNotes: payload.completionNotes || '',
+    paymentRecordedAt: at,
+    ...(method ? { paymentMode: method.id, paymentMethodLabel: method.label, paidAt: at } : {}),
+  };
+};
 
 const addTimeline = (serviceRequestId, status, viewer, note) =>
   ServiceRequestTimeline.create({
@@ -100,14 +228,42 @@ const addTimeline = (serviceRequestId, status, viewer, note) =>
   });
 
 class ServiceRequestService {
-  // A vendor viewer carries their categories: open broadcasts reach only vendors who offer the
-  // request's category (requests contract §2).
+  // A vendor viewer carries their categories and whether they are accepting requests: open
+  // broadcasts reach only vendors who offer the request's category (requests contract §2), and
+  // none reach a vendor whose availability is off (Phase 4B §6).
   async withCategories(viewer) {
     if (viewer.role !== 'VENDOR' || viewer.categoryIds) return viewer;
     const vendor = await Vendor.findOne({ _id: viewer.id, isDeleted: { $ne: true } })
-      .select('categoryIds')
+      .select('categoryIds availability')
       .lean();
-    return { ...viewer, categoryIds: vendor ? vendor.categoryIds : [] };
+    return {
+      ...viewer,
+      categoryIds: vendor ? vendor.categoryIds : [],
+      acceptingRequests: Boolean(vendor) && vendor.availability !== false,
+    };
+  }
+
+  // What a vendor's lists hold, for a viewer from withCategories. `declined: true` is the
+  // Rejected tab: the broadcasts they declined. Otherwise their own requests in any status, plus
+  // the open broadcasts in their categories they have not declined — none while they are not
+  // accepting requests (Phase 4B §6; held and directed work is unaffected).
+  // ⚠️ The vendor report's total counts with these same conditions (services/vendorreport.js), so
+  // the report and the lists cannot disagree; change one and you change both.
+  vendorListCondition(viewer, { declined = false } = {}) {
+    if (declined) return { declinedBy: viewer.id };
+    const own = { vendorId: viewer.id };
+    if (viewer.acceptingRequests === false) return own;
+    return {
+      $or: [
+        own,
+        {
+          vendorId: null,
+          status: 'PENDING',
+          declinedBy: { $ne: viewer.id },
+          categoryId: { $in: viewer.categoryIds || [] },
+        },
+      ],
+    };
   }
 
   // Taking or turning down open work needs an ACTIVE + APPROVED vendor who offers the request's
@@ -180,10 +336,12 @@ class ServiceRequestService {
 
     let vendorId = null;
     if (payload.vendorId) {
+      // A vendor who is not accepting requests cannot be chosen (Phase 4B §6).
       const vendor = await Vendor.findOne({
         _id: payload.vendorId,
         status: 'ACTIVE',
         approvalStatus: 'APPROVED',
+        availability: { $ne: false },
         categoryIds: category._id,
         isDeleted: { $ne: true },
       });
@@ -220,6 +378,17 @@ class ServiceRequestService {
       fallbackArea = address.city;
     }
 
+    // §2 (Phase 4B): only the customer's own `request` uploads, stored as their paths. The photos
+    // describe the job, so vendors see them before they accept (bible §32); the upload already
+    // dropped any location the camera wrote into them.
+    const images = await resolveImageField({
+      value: payload.images,
+      field: 'images',
+      type: 'request',
+      ownerId: customerId,
+      stored: [],
+    });
+
     const request = await ServiceRequest.create({
       requestNumber: generateRequestNumber(),
       customerId,
@@ -231,25 +400,20 @@ class ServiceRequestService {
       serviceAddressDetails: details || undefined,
       serviceArea: (details && (details.area || details.city)) || fallbackArea || '',
       description: payload.description || '',
-      images: payload.images || [],
+      images,
       priority: payload.priority,
-      scheduledAt: payload.scheduledAt || null,
+      ...scheduleOf(payload),
       notes: payload.notes || '',
       status: 'PENDING',
     });
 
     await addTimeline(request._id, 'PENDING', viewer, 'Service request submitted by customer.');
 
-    await notify({
-      userId: customerId,
-      userRole: 'CUSTOMER',
-      title: 'Service Request Created',
-      message: vendorId
-        ? `Your booking ${request.requestNumber} has been sent to the professional you chose.`
-        : `Your booking ${request.requestNumber} has been received and broadcast to verified specialists.`,
-      type: 'SERVICE_REQUEST',
-      referenceId: request._id,
-    });
+    await notify(
+      request,
+      toCustomer(request),
+      vendorId ? MESSAGES.createdDirected : MESSAGES.createdOpen
+    );
 
     return this.view(request._id, viewer);
   }
@@ -292,14 +456,7 @@ class ServiceRequestService {
     }
 
     await addTimeline(accepted._id, 'ACCEPTED', viewer, 'Vendor accepted service request.');
-    await notify({
-      userId: accepted.customerId,
-      userRole: 'CUSTOMER',
-      title: 'Request Accepted 👨‍🔧',
-      message: `A service provider has claimed your request ${accepted.requestNumber} and is preparing dispatch.`,
-      type: 'SERVICE_REQUEST',
-      referenceId: accepted._id,
-    });
+    await notify(accepted, toCustomer(accepted), MESSAGES.accepted);
 
     return this.view(id, viewer);
   }
@@ -317,20 +474,13 @@ class ServiceRequestService {
     if (sameId(request.vendorId, vendorId)) {
       const rejected = await ServiceRequest.findOneAndUpdate(
         { _id: request._id, vendorId, status: 'PENDING' },
-        { $set: { status: 'REJECTED' } },
+        { $set: { status: 'REJECTED', rejectedAt: clock.now() } },
         { new: true }
       );
       if (!rejected) throw notPending();
 
       await addTimeline(rejected._id, 'REJECTED', viewer, note || 'Service request rejected.');
-      await notify({
-        userId: rejected.customerId,
-        userRole: 'CUSTOMER',
-        title: 'Request Status Update',
-        message: `Your request ${rejected.requestNumber} could not be taken by the professional you chose.`,
-        type: 'SERVICE_REQUEST',
-        referenceId: rejected._id,
-      });
+      await notify(rejected, toCustomer(rejected), MESSAGES.rejected);
       return this.view(id, viewer);
     }
 
@@ -340,13 +490,23 @@ class ServiceRequestService {
       if (!offersCategory(await this.withCategories(viewer), request)) throw notFound();
       await this.assertCanTakeWork(vendorId, request);
 
-      // No timeline entry or customer notification: the request itself has not changed.
+      // No timeline entry or customer notification: the request itself has not changed. The
+      // decline's time goes in with it, in the same update, so a report counts it exactly once.
       const declined = await ServiceRequest.findOneAndUpdate(
-        { _id: request._id, vendorId: null, status: 'PENDING' },
-        { $addToSet: { declinedBy: vendorId } },
+        { _id: request._id, vendorId: null, status: 'PENDING', declinedBy: { $ne: vendorId } },
+        {
+          $addToSet: { declinedBy: vendorId },
+          $push: { declines: { vendorId, at: clock.now() } },
+        },
         { new: true }
       );
-      if (!declined) throw notPending();
+      if (!declined) {
+        // A second tap that lost to the first has declined it all the same.
+        if (declinedBy(await this.findRequest(id), vendorId)) {
+          return this.view(id, viewer, { checkAccess: false });
+        }
+        throw notPending();
+      }
       return this.view(id, viewer, { checkAccess: false });
     }
 
@@ -382,14 +542,7 @@ class ServiceRequestService {
       viewer,
       'Vendor assigned technician to service request.'
     );
-    await notify({
-      userId: assigned.customerId,
-      userRole: 'CUSTOMER',
-      title: 'Technician Assigned 👥',
-      message: `A specialist has been assigned to your service request ${assigned.requestNumber}.`,
-      type: 'SERVICE_REQUEST',
-      referenceId: assigned._id,
-    });
+    await notify(assigned, toCustomer(assigned), MESSAGES.assigned);
 
     return this.view(id, viewer);
   }
@@ -406,26 +559,23 @@ class ServiceRequestService {
     if (!started) throw invalidTransition();
 
     await addTimeline(started._id, 'IN_PROGRESS', viewer, 'Work started on service request.');
-    await notify({
-      userId: started.customerId,
-      userRole: 'CUSTOMER',
-      title: 'Work In Progress 🛠️',
-      message: `Technician has arrived on site and started work for request ${started.requestNumber}.`,
-      type: 'SERVICE_REQUEST',
-      referenceId: started._id,
-    });
+    await notify(started, toCustomer(started), MESSAGES.started);
 
     return this.view(id, viewer);
   }
 
-  // Payment fields are unchanged for now (recorded as a gap in the contract).
+  // §4 (Phase 4B): an amount above zero writes the payment record in the same update that
+  // completes the work; no amount (or 0, with no payment field — the validation's rule) completes
+  // with no record, as before.
   async completeWork(id, viewer, payload = {}) {
     const request = await this.findRequest(id);
     if (!canSee(request, await this.withCategories(viewer))) throw notFound();
 
-    const updateData = { status: 'COMPLETED', completedAt: new Date() };
+    const at = clock.now();
+    const updateData = { status: 'COMPLETED', completedAt: at };
     if (payload.amount !== undefined) updateData.amount = payload.amount;
     if (payload.completionImages) updateData.completionImages = payload.completionImages;
+    if (payload.amount > 0) Object.assign(updateData, paymentRecordOf(payload, at));
 
     const completed = await ServiceRequest.findOneAndUpdate(
       { _id: request._id, vendorId: viewer.id, status: 'IN_PROGRESS' },
@@ -440,16 +590,52 @@ class ServiceRequestService {
       viewer,
       payload.note || 'Work completed successfully.'
     );
-    await notify({
-      userId: completed.customerId,
-      userRole: 'CUSTOMER',
-      title: 'Service Completed 🎉',
-      message: `Your service request ${completed.requestNumber} has been marked completed! Please rate your technician.`,
-      type: 'SERVICE_REQUEST',
-      referenceId: completed._id,
-    });
+    await notify(completed, toCustomer(completed), MESSAGES.completed);
 
     return this.view(id, viewer);
+  }
+
+  // "Not paid yet" → "Paid", once (bible §37 amended 21/10/2026; Phase 4B §4). Only the status,
+  // the method and the time change; no timeline entry and no notification, as the request's
+  // status did not change. Two presses together: the condition lets exactly one through.
+  async recordPayment(id, viewer, payload) {
+    const method = paymentMethodById(payload.paymentMethodId);
+    const paid = await ServiceRequest.findOneAndUpdate(
+      {
+        _id: id,
+        isDeleted: { $ne: true },
+        vendorId: viewer.id,
+        status: 'COMPLETED',
+        paymentRecordedAt: { $ne: null },
+        paymentStatus: 'PENDING',
+      },
+      {
+        $set: {
+          paymentStatus: 'PAID',
+          paymentMode: method.id,
+          paymentMethodLabel: method.label,
+          paidAt: clock.now(),
+        },
+      },
+      { new: true }
+    );
+
+    if (!paid) {
+      const current = await ServiceRequest.findOne({ _id: id, isDeleted: { $ne: true } });
+      if (!current || !sameId(current.vendorId, viewer.id)) throw notFound();
+      // A paid record is final, whoever's press got there first.
+      if (current.status === 'COMPLETED' && current.paymentStatus === 'PAID') {
+        throw paymentAlreadyRecorded();
+      }
+      throw invalidTransition();
+    }
+
+    return this.view(id, viewer);
+  }
+
+  // Bible §37: the methods follow backend configuration (config/paymentMethods.js), in order.
+  listPaymentMethods() {
+    return PAYMENT_METHODS.map(({ id, label }) => ({ id, label }));
   }
 
   // §5 (owner decision 3D-11): a customer may cancel until a professional accepts.
@@ -460,7 +646,7 @@ class ServiceRequestService {
 
     const cancelled = await ServiceRequest.findOneAndUpdate(
       { _id: request._id, customerId: viewer.id, status: 'PENDING' },
-      { $set: { status: 'CANCELLED' } },
+      { $set: { status: 'CANCELLED', cancelledAt: clock.now() } },
       { new: true }
     );
     if (!cancelled) {
@@ -471,14 +657,11 @@ class ServiceRequestService {
 
     await addTimeline(cancelled._id, 'CANCELLED', viewer, reason || 'Cancelled by customer.');
     if (cancelled.vendorId) {
-      await notify({
-        userId: cancelled.vendorId,
-        userRole: 'VENDOR',
-        title: 'Request Cancelled',
-        message: `Request ${cancelled.requestNumber} was cancelled by the customer.`,
-        type: 'SERVICE_REQUEST',
-        referenceId: cancelled._id,
-      });
+      await notify(
+        cancelled,
+        { userId: cancelled.vendorId, userRole: 'VENDOR' },
+        MESSAGES.cancelled
+      );
     }
 
     return this.view(id, viewer);
@@ -495,21 +678,10 @@ class ServiceRequestService {
     if (viewer.role === 'CUSTOMER') {
       conditions.push({ customerId: viewer.id });
     } else if (viewer.role === 'VENDOR') {
-      const { categoryIds } = await this.withCategories(viewer);
       conditions.push(
-        body.declined === true
-          ? { declinedBy: viewer.id }
-          : {
-              $or: [
-                { vendorId: viewer.id },
-                {
-                  vendorId: null,
-                  status: 'PENDING',
-                  declinedBy: { $ne: viewer.id },
-                  categoryId: { $in: categoryIds },
-                },
-              ],
-            }
+        this.vendorListCondition(await this.withCategories(viewer), {
+          declined: body.declined === true,
+        })
       );
     }
 

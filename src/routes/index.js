@@ -6,6 +6,7 @@ const authenticate = require('../middlewares/auth');
 const optionalAuthenticate = require('../middlewares/optionalAuth');
 const authorize = require('../middlewares/role');
 const validate = require('../middlewares/validation');
+const receiveUploadFiles = require('../middlewares/upload');
 
 // Controllers
 const authController = require('../controllers/auth');
@@ -19,6 +20,7 @@ const serviceRequestController = require('../controllers/servicerequest');
 const reviewController = require('../controllers/review');
 const notificationController = require('../controllers/notification');
 const adminController = require('../controllers/admin');
+const uploadController = require('../controllers/upload');
 
 // Validations
 const authValidation = require('../validations/auth');
@@ -32,6 +34,7 @@ const serviceRequestValidation = require('../validations/servicerequest');
 const reviewValidation = require('../validations/review');
 const adminValidation = require('../validations/admin');
 const notificationValidation = require('../validations/notification');
+const uploadValidation = require('../validations/upload');
 
 // ----------------------------------------------------
 // Health Check
@@ -175,6 +178,14 @@ router.post(
   authorize(['ADMIN']),
   validate(vendorValidation.regenerateAuthCode),
   vendorController.regenerateAuthCode
+);
+// The signed-in vendor's own report, counted from the requests (Phase 4B contract §5)
+router.post(
+  '/vendors/report',
+  authenticate,
+  authorize(['VENDOR']),
+  validate(serviceRequestValidation.vendorReport),
+  serviceRequestController.vendorReport
 );
 
 // ----------------------------------------------------
@@ -382,6 +393,22 @@ router.post(
   validate(serviceRequestValidation.completeRequest),
   serviceRequestController.completeWork
 );
+// "Not paid yet" → "Paid", once, by the vendor holding the work (Phase 4B contract §4)
+router.post(
+  '/requests/record-payment',
+  authenticate,
+  authorize(['VENDOR']),
+  validate(serviceRequestValidation.recordPayment),
+  serviceRequestController.recordPayment
+);
+// The configured offline payment methods, in order (PROJECT_BIBLE.md section 37)
+router.post(
+  '/payment-methods/list',
+  authenticate,
+  authorize(['VENDOR', 'ADMIN']),
+  validate(serviceRequestValidation.listPaymentMethods),
+  serviceRequestController.listPaymentMethods
+);
 
 // ----------------------------------------------------
 // Review Routes (No :id params in URL)
@@ -422,6 +449,27 @@ router.post(
   authenticate,
   validate(notificationValidation.markAsRead),
   notificationController.markAsRead
+);
+// Soft delete from the caller's own inbox (Phase 4B contract §8)
+router.post(
+  '/notifications/delete',
+  authenticate,
+  validate(notificationValidation.deleteNotification),
+  notificationController.remove
+);
+
+// ----------------------------------------------------
+// Upload Routes (Phase 4B contract §1)
+// ----------------------------------------------------
+// multipart/form-data: `type` + 1–5 `files`. The files are received only after the role check, and
+// `type` is validated only once the whole body is parsed (the part order does not matter).
+router.post(
+  '/uploads',
+  authenticate,
+  authorize(['CUSTOMER', 'VENDOR']),
+  receiveUploadFiles,
+  validate(uploadValidation.createUpload),
+  uploadController.create
 );
 
 // ----------------------------------------------------

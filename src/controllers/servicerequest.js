@@ -1,4 +1,5 @@
 const serviceRequestService = require('../services/servicerequest');
+const vendorReportService = require('../services/vendorreport');
 const ApiResponse = require('../utils/ApiResponse');
 
 // Every method passes the signed-in user (`req.user`: { id, role }) so the service can decide
@@ -65,6 +66,35 @@ class ServiceRequestController {
     try {
       const request = await serviceRequestService.completeWork(req.body.id, req.user, req.body);
       return ApiResponse.success(res, 'Service work completed successfully.', request);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async recordPayment(req, res, next) {
+    try {
+      const request = await serviceRequestService.recordPayment(req.body.id, req.user, req.body);
+      return ApiResponse.success(res, 'Payment recorded.', request);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async listPaymentMethods(req, res, next) {
+    try {
+      const methods = serviceRequestService.listPaymentMethods();
+      return ApiResponse.success(res, 'Payment methods retrieved successfully.', methods);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // Routed as /vendors/report, but counted from the requests: whose report it is comes from the
+  // token, never the body (Phase 4B §5).
+  async vendorReport(req, res, next) {
+    try {
+      const report = await vendorReportService.getReport(req.user, req.body.period);
+      return ApiResponse.success(res, 'Vendor report retrieved successfully.', report);
     } catch (error) {
       next(error);
     }

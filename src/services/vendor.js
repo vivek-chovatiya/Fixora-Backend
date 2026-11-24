@@ -4,6 +4,14 @@ const ApiError = require('../utils/ApiError');
 const { escapeRegex } = require('../utils/regex');
 const { ERROR_CODES } = require('../utils/errorCodes');
 const { getPagination, getPaginationMetadata } = require('../utils/pagination');
+const { resolveImageField } = require('./uploadAttach');
+
+// [] when never set, else the seven days; a closed day carries no opensAt/closesAt keys at all
+// (Phase 4B contract §6), so the app never sees a time on a day the vendor is shut.
+const workingHoursOf = (vendor) =>
+  (vendor.workingHours || []).map(({ day, isOpen, opensAt, closesAt }) =>
+    isOpen ? { day, isOpen, opensAt, closesAt } : { day, isOpen }
+  );
 
 const vendorMapper = (vendor) => {
   if (!vendor) return null;
@@ -25,6 +33,7 @@ const vendorMapper = (vendor) => {
     totalReviews: vendor.totalReviews,
     approvalStatus: vendor.approvalStatus,
     availability: vendor.availability,
+    workingHours: workingHoursOf(vendor),
     status: vendor.status,
     createdAt: vendor.createdAt,
     updatedAt: vendor.updatedAt,
@@ -193,7 +202,42 @@ class VendorService {
       );
     }
 
-    const updated = await Vendor.findByIdAndUpdate(id, payload, { new: true });
+    const changes = { ...payload };
+
+    // Cleared text is stored '' (Phase 4B contract §6), which the app reads as none.
+    for (const field of ['description', 'address']) {
+      if (payload[field] === null) changes[field] = '';
+    }
+
+    // Pictures must be this vendor's own uploads of the right type, or what is already stored
+    // (contract §2) — the vendor being updated, even when an administrator sends it.
+    if (payload.profileImage !== undefined) {
+      changes.profileImage = await resolveImageField({
+        value: payload.profileImage,
+        field: 'profileImage',
+        type: 'profile',
+        ownerId: vendor._id,
+        stored: vendor.profileImage,
+      });
+    }
+    if (payload.shopImages !== undefined) {
+      changes.shopImages = await resolveImageField({
+        value: payload.shopImages,
+        field: 'shopImages',
+        type: 'shop',
+        ownerId: vendor._id,
+        stored: vendor.shopImages,
+      });
+    }
+
+    // A closed day is stored without times, even when the client sent them as null.
+    if (payload.workingHours !== undefined) {
+      changes.workingHours = payload.workingHours.map(({ day, isOpen, opensAt, closesAt }) =>
+        isOpen ? { day, isOpen, opensAt, closesAt } : { day, isOpen }
+      );
+    }
+
+    const updated = await Vendor.findByIdAndUpdate(id, changes, { new: true });
     return vendorMapper(updated);
   }
 

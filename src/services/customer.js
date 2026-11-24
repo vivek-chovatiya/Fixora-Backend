@@ -5,6 +5,7 @@ const ApiError = require('../utils/ApiError');
 const { escapeRegex } = require('../utils/regex');
 const { ERROR_CODES } = require('../utils/errorCodes');
 const { getPagination, getPaginationMetadata } = require('../utils/pagination');
+const { resolveImageField } = require('./uploadAttach');
 
 const customerMapper = (customer) => {
   if (!customer) return null;
@@ -140,7 +141,39 @@ class CustomerService {
     // Suspending ends every session at once (requests contract §8); reactivating does not bring
     // the old ones back.
     const suspending = payload.status && payload.status !== 'ACTIVE' && payload.status !== customer.status;
-    const changes = suspending ? { ...payload, $inc: { tokenVersion: 1 } } : payload;
+    const changes = suspending ? { ...payload, $inc: { tokenVersion: 1 } } : { ...payload };
+
+    // Removing the email (Phase 4B contract §7) unsets the field: stored as '', a second removal
+    // would collide with the first in the partial unique index, which counts every string. Without
+    // a verified phone, email and password would be the account's only way in, so it stays — for
+    // an administrator too. With no email stored there is nothing to remove: left as it is.
+    const removingEmail = payload.email === null || payload.email === '';
+    if (removingEmail && !customer.email) {
+      delete changes.email;
+    } else if (removingEmail) {
+      if (!customer.phoneVerifiedAt) {
+        throw new ApiError(
+          400,
+          'This email is the only way to sign in to the account.',
+          [{ field: 'email', message: 'The email cannot be removed without a verified phone.' }],
+          ERROR_CODES.EMAIL_REQUIRED_FOR_SIGN_IN
+        );
+      }
+      delete changes.email;
+      changes.$unset = { email: 1 };
+    }
+
+    // The picture must be this customer's own `profile` upload, or the one already stored
+    // (contract §2); null or '' clears it.
+    if (payload.profileImage !== undefined) {
+      changes.profileImage = await resolveImageField({
+        value: payload.profileImage,
+        field: 'profileImage',
+        type: 'profile',
+        ownerId: customer._id,
+        stored: customer.profileImage,
+      });
+    }
 
     const updated = await Customer.findByIdAndUpdate(id, changes, { new: true });
     return customerMapper(updated);

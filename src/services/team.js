@@ -1,5 +1,11 @@
 const TeamMember = require('../models/team');
 const ApiError = require('../utils/ApiError');
+const { resolveImageField } = require('./uploadAttach');
+
+// A member's photo is one of their vendor's own `team` uploads, or the one already stored on that
+// member (Phase 4B contract §2); null or '' clears it.
+const memberPhoto = (vendorId, value, stored) =>
+  resolveImageField({ value, field: 'profileImage', type: 'team', ownerId: vendorId, stored });
 
 const teamMapper = (member) => {
   if (!member) return null;
@@ -18,11 +24,11 @@ const teamMapper = (member) => {
 
 class TeamService {
   async createMember(vendorId, payload) {
-    const member = await TeamMember.create({
-      ...payload,
-      phone: payload.phone || '',
-      vendorId,
-    });
+    const changes = { ...payload, phone: payload.phone || '', vendorId };
+    if (payload.profileImage !== undefined) {
+      changes.profileImage = await memberPhoto(vendorId, payload.profileImage, null);
+    }
+    const member = await TeamMember.create(changes);
     return teamMapper(member);
   }
 
@@ -47,7 +53,14 @@ class TeamService {
       throw new ApiError(404, 'Team member not found.');
     }
     // A cleared phone is stored as '' whether the client sent null or '' (requests contract §7).
-    const changes = payload.phone === null ? { ...payload, phone: '' } : payload;
+    const changes = payload.phone === null ? { ...payload, phone: '' } : { ...payload };
+    if (payload.profileImage !== undefined) {
+      changes.profileImage = await memberPhoto(
+        member.vendorId,
+        payload.profileImage,
+        member.profileImage
+      );
+    }
     const updated = await TeamMember.findByIdAndUpdate(id, changes, { new: true });
     return teamMapper(updated);
   }

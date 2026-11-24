@@ -9,10 +9,12 @@ const Vendor = require('../models/vendor');
 const Admin = require('../models/admin');
 const Address = require('../models/address');
 const ServiceRequest = require('../models/servicerequest');
+const ServiceRequestTimeline = require('../models/timeline');
 const OtpChallenge = require('../models/otpchallenge');
 const VendorRegistration = require('../models/vendorregistration');
 const SignInAttempt = require('../models/signinattempt');
 const syncAccountIndexes = require('../config/indexes');
+const { VENDOR_WORKING_DAYS } = require('../config/workingHours');
 
 const mongoUri = process.env.MONGO_URI || 'mongodb://localhost:27017/fixora';
 
@@ -35,6 +37,7 @@ const seedDatabase = async () => {
     await Admin.deleteMany({});
     await Address.deleteMany({});
     await ServiceRequest.deleteMany({});
+    await ServiceRequestTimeline.deleteMany({});
     await OtpChallenge.deleteMany({});
     await VendorRegistration.deleteMany({});
     await SignInAttempt.deleteMany({});
@@ -179,6 +182,13 @@ const seedDatabase = async () => {
         approvalStatus: 'APPROVED',
         status: 'ACTIVE',
         availability: true,
+        // A working week to show on a device (Phase 4B contract, demo data): Monday to Saturday
+        // 09:00–19:00, Sunday closed (stored without times).
+        workingHours: VENDOR_WORKING_DAYS.map((day) =>
+          day === 'SUN'
+            ? { day, isOpen: false }
+            : { day, isOpen: true, opensAt: '09:00', closesAt: '19:00' }
+        ),
       },
       {
         businessName: 'Iyer Home Services',
@@ -236,7 +246,66 @@ const seedDatabase = async () => {
       scheduledAt: new Date(Date.now() + 3600000 * 3),
     });
 
-    console.log(`Created ${req1.requestNumber} and ${req2.requestNumber} Service Requests.`);
+    // 7b. "Record a payment later" on a device (Phase 4B contract, demo data): Asha's finished
+    // job for Kumar Electricals, completed with ₹499 recorded as not paid yet. Raised three hours
+    // ago, accepted, started and completed after that, so its times read in a believable order.
+    const hoursAgo = (hours) => new Date(Date.now() - hours * 3600000);
+    const raisedAt = hoursAgo(3);
+    const acceptedAt = hoursAgo(2.75);
+    const startedAt = hoursAgo(2);
+    const completedAt = hoursAgo(1);
+    const req3 = await ServiceRequest.create({
+      requestNumber: 'REQ-' + Math.floor(100000 + Math.random() * 900000),
+      createdAt: raisedAt,
+      customerId: phoneCustomers[0]._id,
+      vendorId: phoneVendors[0]._id,
+      categoryId: createdCategories[0]._id,
+      subCategoryId: createdSubCategories[1]._id,
+      serviceAddress: '14 Lake View Road, Flat 3B, Koregaon Park, Pune 411001',
+      serviceAddressDetails: {
+        line1: '14 Lake View Road',
+        line2: 'Flat 3B',
+        area: 'Koregaon Park',
+        city: 'Pune',
+        pincode: '411001',
+      },
+      serviceArea: 'Koregaon Park',
+      description: 'Two kitchen sockets spark when something is plugged in.',
+      priority: 'MEDIUM',
+      status: 'COMPLETED',
+      completedAt,
+      amount: 499,
+      currency: 'INR',
+      paymentStatus: 'PENDING',
+      paymentRecordedAt: completedAt,
+    });
+    // A new document's updatedAt is its createdAt; its last change was the completion.
+    await ServiceRequest.collection.updateOne(
+      { _id: req3._id },
+      { $set: { updatedAt: completedAt } }
+    );
+    const customerStep = { updatedBy: phoneCustomers[0]._id, userRole: 'CUSTOMER' };
+    const vendorStep = { updatedBy: phoneVendors[0]._id, userRole: 'VENDOR' };
+    await ServiceRequestTimeline.insertMany(
+      [
+        ['PENDING', raisedAt, customerStep, 'Service request submitted by customer.'],
+        ['ACCEPTED', acceptedAt, vendorStep, 'Vendor accepted service request.'],
+        ['IN_PROGRESS', startedAt, vendorStep, 'Work started on service request.'],
+        ['COMPLETED', completedAt, vendorStep, 'Replaced both sockets and checked the wiring.'],
+      ].map(([status, at, step, note]) => ({
+        serviceRequestId: req3._id,
+        status,
+        ...step,
+        note,
+        timestamp: at,
+        createdAt: at,
+        updatedAt: at,
+      }))
+    );
+
+    console.log(
+      `Created ${req1.requestNumber}, ${req2.requestNumber} and ${req3.requestNumber} Service Requests.`
+    );
     console.log('Database Seeding Complete Successfully!');
     process.exit(0);
   } catch (error) {

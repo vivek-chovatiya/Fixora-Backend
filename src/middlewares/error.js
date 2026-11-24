@@ -1,3 +1,4 @@
+const multer = require('multer');
 const logger = require('../utils/logger');
 const ApiError = require('../utils/ApiError');
 const CoreApiError = require('../core/errors/ApiError');
@@ -22,7 +23,42 @@ const invalidInput = (fields) => ({
   errors: fields.map((field) => ({ field, message: `"${field}" is not valid.` })),
 });
 
+// Multer's limits on POST /uploads (Phase 4B contract §1) are the caller's input, never a 500.
+// Only the field name is named: never the client's file name.
+const classifyUpload = (err) => {
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return {
+      statusCode: 413,
+      message: 'An image is larger than 5 MB.',
+      code: ERROR_CODES.FILE_TOO_LARGE,
+      errors: [{ field: 'files', message: '"files" may each be at most 5 MB.' }],
+    };
+  }
+  if (
+    err.code === 'LIMIT_FILE_COUNT' ||
+    (err.code === 'LIMIT_UNEXPECTED_FILE' && err.field === 'files')
+  ) {
+    return {
+      statusCode: 400,
+      message: 'At most 5 images can be uploaded at once.',
+      code: ERROR_CODES.TOO_MANY_FILES,
+      errors: [{ field: 'files', message: '"files" may hold at most 5 images.' }],
+    };
+  }
+  return {
+    statusCode: 400,
+    message: 'Validation Failed',
+    code: ERROR_CODES.VALIDATION_FAILED,
+    errors: err.field
+      ? [{ field: err.field, message: `"${err.field}" is not allowed here.` }]
+      : null,
+  };
+};
+
 const classify = (err) => {
+  if (err instanceof multer.MulterError) {
+    return classifyUpload(err);
+  }
   if (err.isJoi) {
     return {
       statusCode: 400,

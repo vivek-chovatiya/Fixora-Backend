@@ -38,6 +38,15 @@ const ERROR_CODES = Object.freeze({
   RATE_LIMITED: 'RATE_LIMITED',
   REVIEW_NOT_FOUND: 'REVIEW_NOT_FOUND',
 
+  // Phase 4B contract (lead, 24/11/2026): uploads §1, email removal §7, notifications §8.
+  FILE_TOO_LARGE: 'FILE_TOO_LARGE',
+  FILE_TYPE_NOT_ALLOWED: 'FILE_TYPE_NOT_ALLOWED',
+  TOO_MANY_FILES: 'TOO_MANY_FILES',
+  EMAIL_REQUIRED_FOR_SIGN_IN: 'EMAIL_REQUIRED_FOR_SIGN_IN',
+  NOTIFICATION_NOT_FOUND: 'NOTIFICATION_NOT_FOUND',
+  // Phase 4B §4: record-payment on a record that is already paid (nothing changes).
+  PAYMENT_ALREADY_RECORDED: 'PAYMENT_ALREADY_RECORDED',
+
   // Generic, by HTTP status, for everything the contract does not name.
   BAD_REQUEST: 'BAD_REQUEST',
   FORBIDDEN: 'FORBIDDEN',

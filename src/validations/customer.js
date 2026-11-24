@@ -6,8 +6,10 @@ const updateCustomer = {
     id: Joi.string().hex().length(24).required(),
     firstName: Joi.string().max(100).trim(),
     lastName: Joi.string().max(100).trim().allow(''),
-    email: Joi.string().max(254).email().lowercase().trim(),
+    // null or '' removes it (Phase 4B contract §7); leaving it out keeps it.
+    email: Joi.string().max(254).email().lowercase().trim().allow(null, ''),
     phone,
+    // An uploaded `profile` image, the stored one, or null / '' to clear (contract §2).
     profileImage: Joi.string().max(2048).allow(null, ''),
     defaultAddress: Joi.string().hex().length(24).allow(null),
     status: Joi.string().valid('ACTIVE', 'INACTIVE', 'BLOCKED'),

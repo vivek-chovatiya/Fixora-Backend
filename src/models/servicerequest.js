@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { PAYMENT_MODES } = require('../config/paymentMethods');
 
 // Where the work happens, as the customer gave it (requests contract §6). Stored on the request
 // only — never copied into the address book.
@@ -29,6 +30,16 @@ const serviceRequestSchema = new mongoose.Schema(
     // Vendors who declined this open broadcast request: it stays PENDING for everyone else and
     // leaves only their list (requests contract §4). Never shown to customers or other vendors.
     declinedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Vendor' }],
+    // When each of those vendors declined (Phase 4B §5: reports count a decline when it happened).
+    // Pushed in the same conditional update that adds the vendor to declinedBy; a decline from
+    // before 4B has no entry here. Admin views only, like declinedBy.
+    declines: [
+      {
+        _id: false,
+        vendorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Vendor', required: true },
+        at: { type: Date, required: true },
+      },
+    ],
     assignedTeamMemberId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'TeamMember',
@@ -65,11 +76,28 @@ const serviceRequestSchema = new mongoose.Schema(
       default: 'PENDING',
       index: true,
     },
+    // The offline payment record (bible §36–§37, Phase 4B §4). `PENDING` means "not paid yet".
+    // `paymentMode` holds the method id once paid (config/paymentMethods.js); while PENDING it is
+    // the old default and means nothing. The record exists from `paymentRecordedAt`; what each
+    // party sees of it is built in services/requestview.js, never read from these fields directly.
     paymentStatus: { type: String, enum: ['PENDING', 'PAID'], default: 'PENDING' },
-    paymentMode: { type: String, enum: ['CASH', 'ONLINE'], default: 'CASH' },
+    paymentMode: { type: String, enum: PAYMENT_MODES, default: 'CASH' },
     amount: { type: Number, default: 0 },
+    currency: { type: String, default: null },
+    paymentMethodLabel: { type: String, default: null },
+    // The vendor's own notes on the finished job — never shown to the customer.
+    completionNotes: { type: String, default: '' },
+    paymentRecordedAt: { type: Date, default: null },
+    paidAt: { type: Date, default: null },
+    // The customer's preferred date (YYYY-MM-DD) and time (HH:mm), India wall-clock, as sent
+    // (Phase 4B §3). `scheduledAt` is derived from them for the web views.
+    preferredDate: { type: String, default: null },
+    preferredTime: { type: String, default: null },
     scheduledAt: { type: Date, default: null },
     completedAt: { type: Date, default: null },
+    // Set by a directed reject and by a cancel, so reports count them when they happened.
+    rejectedAt: { type: Date, default: null },
+    cancelledAt: { type: Date, default: null },
     notes: { type: String, default: '' },
     isDeleted: { type: Boolean, default: false, index: true },
     deletedAt: { type: Date, default: null },

@@ -1,6 +1,20 @@
 const Notification = require('../models/notification');
 const ApiError = require('../utils/ApiError');
+const { ERROR_CODES } = require('../utils/errorCodes');
 const { getPagination, getPaginationMetadata } = require('../utils/pagination');
+
+// A notification is the caller's own only when both the account id AND the role match: a customer
+// and a vendor are separate collections, so the same id under the other role is another inbox
+// (Phase 4B contract §8). Anything else — another account's, already deleted, unknown — is 404.
+const ownNotification = (id, userContext) => ({
+  _id: id,
+  userId: userContext.id,
+  userRole: userContext.role,
+  isDeleted: { $ne: true },
+});
+
+const notificationNotFound = () =>
+  new ApiError(404, 'Notification not found.', null, ERROR_CODES.NOTIFICATION_NOT_FOUND);
 
 const notificationMapper = (n) => {
   if (!n) return null;
@@ -44,18 +58,24 @@ class NotificationService {
   }
 
   async markAsRead(id, userContext) {
-    const notification = await Notification.findOne({ _id: id, isDeleted: { $ne: true } });
-    if (!notification || notification.userId.toString() !== userContext.id.toString()) {
-      throw new ApiError(404, 'Notification not found.');
-    }
-
-    const updated = await Notification.findByIdAndUpdate(
-      id,
+    const updated = await Notification.findOneAndUpdate(
+      ownNotification(id, userContext),
       { isRead: true, readAt: new Date() },
       { new: true }
     );
+    if (!updated) throw notificationNotFound();
 
     return notificationMapper(updated);
+  }
+
+  // Soft delete: the row stays, it only leaves the inbox (Phase 4B contract §8).
+  async deleteNotification(id, userContext) {
+    const deleted = await Notification.findOneAndUpdate(ownNotification(id, userContext), {
+      isDeleted: true,
+      deletedAt: new Date(),
+    });
+    if (!deleted) throw notificationNotFound();
+    return true;
   }
 }
 

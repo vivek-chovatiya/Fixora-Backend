@@ -15,7 +15,11 @@ const markAsRead = {
   }),
 };
 
+// Phase 4B contract §8: the same body as read.
+const deleteNotification = markAsRead;
+
 module.exports = {
   listNotifications,
   markAsRead,
+  deleteNotification,
 };

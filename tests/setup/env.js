@@ -13,3 +13,10 @@ process.env.LOG_LEVEL = 'debug';
 // The per-IP /auth limit is read per request; suites make many auth calls from one address, so it
 // is out of the way by default and tests/rateLimits.test.js lowers it to prove it.
 process.env.AUTH_RATE_LIMIT_MAX = '1000000';
+// Uploaded files go to a fresh temporary folder per test file (index.js serves the same one),
+// never the repository's uploads/; tests/setup/uploads.js removes it after the file's tests.
+process.env.UPLOAD_PATH = require('path').join(
+  require('os').tmpdir(),
+  'fixora-test-uploads',
+  `${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`
+);

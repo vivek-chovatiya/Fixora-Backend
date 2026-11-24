@@ -7,6 +7,7 @@ const syncAccountIndexes = require('./src/config/indexes');
 const runStartupMigrations = require('./src/config/migrations');
 const checkEnvironment = require('./src/config/startupChecks');
 const parseTrustProxy = require('./src/config/trustProxy');
+const { uploadRoot } = require('./src/config/uploads');
 const routes = require('./src/routes');
 const errorHandler = require('./src/middlewares/error');
 const authRateLimit = require('./src/middlewares/authRateLimit');
@@ -24,7 +25,17 @@ app.use(helmet());
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use('/uploads', express.static('uploads'));
+// Uploaded images (Phase 4B contract §1): the same directory POST /uploads writes to, no index
+// pages, and readable by the web views' <img> from another origin (helmet's same-origin default
+// would block them), with that header on these files only. Public to anyone holding the URL (an
+// open item).
+app.use(
+  '/uploads',
+  express.static(uploadRoot(), {
+    index: false,
+    setHeaders: (res) => res.set('Cross-Origin-Resource-Policy', 'cross-origin'),
+  })
+);
 
 // Request logging middleware
 app.use((req, res, next) => {
