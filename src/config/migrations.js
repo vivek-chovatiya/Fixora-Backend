@@ -10,7 +10,9 @@ const { maskPhoneForLog } = require('../utils/phone');
 //      writes, so the model setter is not involved. A clash with an account that already has the
 //      normalised number is logged (masked) and left as it was — two accounts are never merged here.
 //   2. Accounts created by phone sign-in before `phoneVerifiedAt` existed are marked verified:
-//      customers without a password, and vendors with an auth code but no password.
+//      customers without a password, and vendors with an auth code but no password. The auth code
+//      itself is gone (Phase 5 contract §1.3); its stored hash is read here only as the marker of
+//      a phone-registered vendor, and this matters more now: vendor sign in needs a proved phone.
 //
 // ⚠️ Never log a full phone number here.
 

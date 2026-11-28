@@ -10,7 +10,7 @@
  * that throw `new ApiError(404, '...')` keep working and still produce a code.
  *
  * ⚠️ Add a code here only when a client genuinely needs to tell the case apart. A code is never a
- * place to carry detail — no ids, no values, and never a one-time or vendor auth code.
+ * place to carry detail — no ids, no values, and never a one-time code.
  */
 
 const ERROR_CODES = Object.freeze({
@@ -22,8 +22,6 @@ const ERROR_CODES = Object.freeze({
   OTP_RESEND_TOO_SOON: 'OTP_RESEND_TOO_SOON',
   REGISTRATION_NOT_FOUND: 'REGISTRATION_NOT_FOUND',
   PHONE_ALREADY_REGISTERED: 'PHONE_ALREADY_REGISTERED',
-  AUTH_CODE_INVALID: 'AUTH_CODE_INVALID',
-  SIGNIN_TOO_MANY_ATTEMPTS: 'SIGNIN_TOO_MANY_ATTEMPTS',
   ACCOUNT_SUSPENDED: 'ACCOUNT_SUSPENDED',
   UNAUTHORIZED: 'UNAUTHORIZED',
 
@@ -46,6 +44,12 @@ const ERROR_CODES = Object.freeze({
   NOTIFICATION_NOT_FOUND: 'NOTIFICATION_NOT_FOUND',
   // Phase 4B §4: record-payment on a record that is already paid (nothing changes).
   PAYMENT_ALREADY_RECORDED: 'PAYMENT_ALREADY_RECORDED',
+
+  // Phase 5 contract §2 (28/11/2026): the WhatsApp provider refused the code or did not answer, or
+  // no channel could deliver it. A 503 the user may retry at once.
+  OTP_DELIVERY_FAILED: 'OTP_DELIVERY_FAILED',
+  // Retired with the vendor auth code (Phase 5 contract §1.3) and never to be reused for another
+  // meaning, since older app builds still map them: AUTH_CODE_INVALID, SIGNIN_TOO_MANY_ATTEMPTS.
 
   // Generic, by HTTP status, for everything the contract does not name.
   BAD_REQUEST: 'BAD_REQUEST',

@@ -24,7 +24,12 @@ const teamMapper = (member) => {
 
 class TeamService {
   async createMember(vendorId, payload) {
-    const changes = { ...payload, phone: payload.phone || '', vendorId };
+    const changes = {
+      ...payload,
+      phone: payload.phone || '',
+      designation: payload.designation || '',
+      vendorId,
+    };
     if (payload.profileImage !== undefined) {
       changes.profileImage = await memberPhoto(vendorId, payload.profileImage, null);
     }
@@ -52,8 +57,11 @@ class TeamService {
     if (!member || member.vendorId.toString() !== vendorId.toString()) {
       throw new ApiError(404, 'Team member not found.');
     }
-    // A cleared phone is stored as '' whether the client sent null or '' (requests contract §7).
-    const changes = payload.phone === null ? { ...payload, phone: '' } : { ...payload };
+    // A cleared phone or role is stored as '' whether the client sent null or '' (requests
+    // contract §7, Phase 5 contract §4).
+    const changes = { ...payload };
+    if (payload.phone === null) changes.phone = '';
+    if (payload.designation === null) changes.designation = '';
     if (payload.profileImage !== undefined) {
       changes.profileImage = await memberPhoto(
         member.vendorId,

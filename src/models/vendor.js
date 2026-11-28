@@ -16,16 +16,17 @@ const workingDaySchema = new mongoose.Schema(
 );
 
 // Vendors arrive two ways: the email/password register route (web views) and the mobile phone
-// registration, which creates the vendor only when they confirm their permanent auth code
-// (services/vendorauth.js; PROJECT_BIBLE.md section 7A.2, amended 21/10/2026). A phone vendor has
-// no password, may have no email and gives no address at sign up, so none of those is required
-// here; the email register route still requires them through its Joi schema.
+// registration, which creates the vendor once the one-time code proves the phone
+// (services/vendorauth.js; Phase 5 contract §1). A phone vendor has no password, may have no email
+// and gives no address at sign up, so none of those is required here; the email register route
+// still requires them through its Joi schema.
 //
 // `ownerName` stays the full name the web views read; `ownerFirstName` / `ownerLastName` are what
 // the app's session user carries.
 //
-// ⚠️ `authCodeHash` is the bcrypt hash of a standing credential that never expires: select: false,
-// never mapped into a response, never logged. Replacing it is what revokes the old code.
+// ⚠️ `authCodeHash` / `authCodeIssuedAt` belong to the permanent auth code removed on 28/11/2026
+// (Phase 5 contract §1.3): nothing reads or writes them any more, but older vendors still hold a
+// bcrypt hash there, so the field stays select: false and hidden from every response.
 // Uniqueness lives in the partial indexes below for the reasons given in models/customer.js.
 const vendorSchema = new mongoose.Schema(
   {
@@ -40,9 +41,10 @@ const vendorSchema = new mongoose.Schema(
     authCodeHash: { type: String, select: false, default: null },
     authCodeIssuedAt: { type: Date, default: null },
     // When the phone was proved by a one-time code (phone registration). Email sign-up leaves it
-    // null, and an unproven phone never blocks a phone registration (requests contract §8).
+    // null; an unproven phone never blocks a phone registration (requests contract §8) and cannot
+    // be used to sign in by code (services/vendorauth.js).
     phoneVerifiedAt: { type: Date, default: null },
-    // Bumped to end every session: admin auth-code reissue, suspension, deletion, take-over.
+    // Bumped to end every session: suspension, deletion, take-over.
     tokenVersion: { type: Number, default: 0 },
     categoryIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Category' }],
     address: { type: String, trim: true, default: '' },

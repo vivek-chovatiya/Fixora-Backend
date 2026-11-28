@@ -12,9 +12,13 @@ const { ERROR_CODES, codeForStatus } = require('../utils/errorCodes');
 // A malformed id or a model validation failure is the caller's input, not a fault: 400
 // VALIDATION_FAILED naming the field (requests contract §8), never the value.
 //
+// A 5xx this codebase raised on purpose with its own contract code (503 OTP_DELIVERY_FAILED, Phase
+// 5 contract §2) is an outage the client is told about, not a fault: it keeps its message and is
+// logged as one line, without a stack.
+//
 // ⚠️ Logs carry field names only. A Joi or Mongoose message can quote the rejected value, and that
-// value can be a one-time code or a vendor auth code. For a 500, the error's name and stack frames
-// are logged without its message line, for the same reason.
+// value can be a one-time code. For a 500, the error's name and stack frames are logged without
+// its message line, for the same reason.
 
 const invalidInput = (fields) => ({
   statusCode: 400,
@@ -113,9 +117,12 @@ const errorHandler = (err, req, res, next) => {
   const statusCode = known.statusCode || 500;
   const code = known.code || ERROR_CODES.INTERNAL_ERROR;
   const errors = known.errors || null;
-  const message = statusCode >= 500 ? 'Internal Server Error' : known.message;
+  const deliberate = statusCode >= 500 && Boolean(known.code) && code !== ERROR_CODES.INTERNAL_ERROR;
+  const message = statusCode >= 500 && !deliberate ? 'Internal Server Error' : known.message;
 
-  if (statusCode >= 500) {
+  if (deliberate) {
+    logger.error(`[Operational Error] ${req.method} ${req.originalUrl}: ${code} ${message}`);
+  } else if (statusCode >= 500) {
     logger.error(`[Unhandled Error] ${req.method} ${req.originalUrl}: ${err && err.name}`, {
       code: err && typeof err.code !== 'object' ? err.code : undefined,
       stack: stackFrames(err),

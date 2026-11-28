@@ -17,7 +17,7 @@ const phone = Joi.string()
     'string.pattern.base': `{{#label}} must contain ${PHONE_MIN_DIGITS} to ${PHONE_MAX_DIGITS} digits.`,
   });
 
-// A one-time code or a vendor auth code: exactly six digits, as a string. Spaces and hyphens a
+// A one-time code: exactly six digits, as a string. Spaces and hyphens a
 // person may type or paste are removed first.
 const sixDigitCode = Joi.string()
   .trim()

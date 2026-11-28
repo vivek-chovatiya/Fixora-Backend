@@ -30,17 +30,20 @@ afterEach(() => {
 });
 
 describe('POST /auth/customer/otp/request', () => {
-  test('answers an OtpChallenge and nothing else', async () => {
+  test('answers an OtpChallenge (with its delivery channel) and nothing else', async () => {
     const before = Date.now();
     const res = await requestOtp();
 
     expect(res.status).toBe(200);
     expect(Object.keys(res.body.data).sort()).toEqual([
+      'deliveryChannel',
       'expiresAt',
       'maskedDestination',
       'resendAfterSeconds',
     ]);
     expect(res.body.data.maskedDestination).toBe('••••••3210');
+    // No provider configured: the code was recorded, not sent (Phase 5 contract §2).
+    expect(res.body.data.deliveryChannel).toBe('NONE');
     expect(res.body.data.resendAfterSeconds).toBe(30);
     const expiresAt = Date.parse(res.body.data.expiresAt);
     expect(expiresAt).toBeGreaterThanOrEqual(before + 300000);

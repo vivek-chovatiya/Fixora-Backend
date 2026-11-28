@@ -6,6 +6,7 @@ const logs = require('./helpers/logs');
 const api = require('./helpers/api');
 const db = require('./helpers/db');
 const { createAdmin, createCategory, createPhoneVendor, tokenFor } = require('./helpers/fixtures');
+const bcrypt = require('bcryptjs');
 const errorHandler = require('../src/middlewares/error');
 const Customer = require('../src/models/customer');
 
@@ -50,9 +51,9 @@ describe('failure envelope', () => {
 
   test('a malformed JSON body answers 400 with a generic message that never quotes the body', async () => {
     const res = await request(api.app)
-      .post('/api/v1/auth/vendor/signin')
+      .post('/api/v1/auth/vendor/signin/otp/verify')
       .set('Content-Type', 'application/json')
-      .send('{"phone":"9000000001","authCode":"482913"');
+      .send('{"phone":"9000000001","code":"482913"');
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: 'BAD_REQUEST', message: 'The request body could not be read.' });
     expect(res.text).not.toContain('482913');
@@ -201,8 +202,8 @@ describe('endpoints that existed before phone sign in still work', () => {
     expect(res.body.code).toBe('UNAUTHORIZED');
   });
 
-  test('the vendor list does not expose auth code fields', async () => {
-    await createPhoneVendor();
+  test('the vendor list does not expose auth code fields an older vendor still holds', async () => {
+    await createPhoneVendor({ authCodeHash: await bcrypt.hash('482913', 4) });
     const res = await api.post('/vendors/list', {});
     expect(res.status).toBe(200);
     expect(res.text).not.toContain('authCodeHash');

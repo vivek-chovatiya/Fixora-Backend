@@ -35,7 +35,7 @@ describe('per-IP limit on /auth/*', () => {
       for (let i = 0; i < 3; i += 1) {
         expect((await api.post('/auth/customer/otp/request', { phone: `98765000${10 + i}` })).status).not.toBe(429);
       }
-      const limited = await api.post('/auth/vendor/signin', { phone: '9000000001', authCode: '482913' });
+      const limited = await api.post('/auth/vendor/signin/otp/request', { phone: '9000000001' });
       expect(limited.status).toBe(429);
       expect(limited.body).toMatchObject({ success: false, code: 'RATE_LIMITED', data: null });
       const retryAfter = Number(limited.headers['retry-after']);

@@ -12,7 +12,6 @@ const ServiceRequest = require('../models/servicerequest');
 const ServiceRequestTimeline = require('../models/timeline');
 const OtpChallenge = require('../models/otpchallenge');
 const VendorRegistration = require('../models/vendorregistration');
-const SignInAttempt = require('../models/signinattempt');
 const syncAccountIndexes = require('../config/indexes');
 const { VENDOR_WORKING_DAYS } = require('../config/workingHours');
 
@@ -40,7 +39,6 @@ const seedDatabase = async () => {
     await ServiceRequestTimeline.deleteMany({});
     await OtpChallenge.deleteMany({});
     await VendorRegistration.deleteMany({});
-    await SignInAttempt.deleteMany({});
 
     // Phone sign in moved customer/vendor uniqueness to partial indexes; replace the old ones.
     await syncAccountIndexes();
@@ -145,9 +143,10 @@ const seedDatabase = async () => {
     console.log('Created Demo Vendors:', vendor1.email, vendor2.email);
 
     // 6b. Phone sign-in demo accounts (shared contract, 17/11/2026). They match the mobile app's
-    // mock data, so the same demo steps work against this backend: customers sign in with the
-    // one-time code (OTP_STATIC_CODE, 123456 in development), vendors with phone + auth code.
-    // Auth codes are stored hashed like any issued code, and never printed.
+    // mock data, so the same demo steps work against this backend: customers and vendors alike
+    // sign in with their phone and the one-time code (OTP_STATIC_CODE, 123456 in development).
+    // Vendors hold no auth code since the Phase 5 contract §1 (28/11/2026); their phones count as
+    // proved (phoneVerifiedAt), which is what vendor sign in requires.
     const phoneCustomers = await Customer.insertMany([
       {
         firstName: 'Asha',
@@ -175,8 +174,6 @@ const seedDatabase = async () => {
         ownerFirstName: 'Ravi',
         ownerLastName: 'Kumar',
         phone: '9000000001',
-        authCodeHash: await bcrypt.hash('482913', 10),
-        authCodeIssuedAt: now,
         phoneVerifiedAt: now,
         categoryIds: [createdCategories[0]._id],
         approvalStatus: 'APPROVED',
@@ -197,8 +194,6 @@ const seedDatabase = async () => {
         ownerLastName: 'Iyer',
         email: 'meena.iyer@example.com',
         phone: '9000000002',
-        authCodeHash: await bcrypt.hash('573014', 10),
-        authCodeIssuedAt: now,
         phoneVerifiedAt: now,
         categoryIds: [createdCategories[1]._id, createdCategories[4]._id],
         approvalStatus: 'APPROVED',
@@ -208,7 +203,7 @@ const seedDatabase = async () => {
     ]);
 
     console.log(
-      `Created ${phoneCustomers.length} phone customers and ${phoneVendors.length} phone vendors (codes not shown).`
+      `Created ${phoneCustomers.length} phone customers and ${phoneVendors.length} phone vendors (sign in with the one-time code).`
     );
 
     // 7. Create Demo Service Requests

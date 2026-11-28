@@ -1,9 +1,11 @@
 const mongoose = require('mongoose');
 const hideSecrets = require('../utils/hideSecrets');
 
-// One outstanding one-time code, for a customer sign in (keyed by phone) or a vendor registration
-// (keyed by registration). Issuing a new code rewrites the key's single document in place, which
-// is what makes the previous code stop working; services/otp.js owns every rule.
+// One outstanding one-time code, for a customer or vendor sign in (keyed by purpose and phone) or a
+// vendor registration (keyed by registration). Issuing a new code rewrites the key's single
+// document in place, which is what makes the previous code stop working; services/otp.js owns
+// every rule. A vendor sign-in challenge for a number with no vendor account is a decoy that looks
+// exactly like a real one; nothing here records which it is.
 //
 // ⚠️ Only `codeHash` (bcrypt) is stored, never the code, and it is select: false. The TTL index
 // removes a challenge an hour after it expires; expiry itself is checked by services/otp.js
@@ -12,7 +14,7 @@ const otpChallengeSchema = new mongoose.Schema(
   {
     purpose: {
       type: String,
-      enum: ['CUSTOMER_SIGN_IN', 'VENDOR_REGISTRATION'],
+      enum: ['CUSTOMER_SIGN_IN', 'VENDOR_SIGN_IN', 'VENDOR_REGISTRATION'],
       required: true,
     },
     phone: { type: String, required: true, trim: true },

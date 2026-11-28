@@ -12,3 +12,8 @@ TODO.md
 postman/
 src/logs/
 uploads/
+# Firebase service-account keys (push notifications) live outside the repository; these stop one
+# being committed by accident. Firebase names a downloaded key <project-id>-firebase-adminsdk-….json.
+*service-account*.json
+firebase-adminsdk*.json
+*-firebase-adminsdk-*.json

@@ -1,16 +1,22 @@
-// Vendor onboarding and sign in (shared contract; PROJECT_BIBLE.md section 7A.2 amended 21/10/2026).
+// Vendor onboarding and sign in by one-time code (Phase 5 contract §1, owner decision 28/11/2026:
+// the permanent auth code of PROJECT_BIBLE.md section 7A.2 is removed).
 const jwt = require('jsonwebtoken');
 const logs = require('./helpers/logs');
 const api = require('./helpers/api');
 const db = require('./helpers/db');
 const clock = require('./helpers/clock');
 const { createCategory, createPhoneVendor } = require('./helpers/fixtures');
+const OtpChallenge = require('../src/models/otpchallenge');
 const Vendor = require('../src/models/vendor');
 const VendorRegistration = require('../src/models/vendorregistration');
+const otpDelivery = require('../src/services/otpdelivery');
 const secretCode = require('../src/utils/secretCode');
 
 const OTP = '123456';
 const PHONE = '9000000003';
+const VENDOR_PHONE = '9000000001';
+const UNKNOWN_PHONE = '9111111111';
+const MINUTE = 60 * 1000;
 
 let categories;
 
@@ -28,18 +34,24 @@ const register = (overrides) => api.post('/auth/vendor/register', details(overri
 const requestOtp = (registrationId) => api.post('/auth/vendor/otp/request', { registrationId });
 const verifyOtp = (registrationId, code = OTP) =>
   api.post('/auth/vendor/otp/verify', { registrationId, code });
-const confirm = (registrationId, authCode) =>
-  api.post('/auth/vendor/auth-code/confirm', { registrationId, authCode });
-const regenerate = (registrationId) =>
-  api.post('/auth/vendor/auth-code/regenerate', { registrationId });
-const signIn = (phone, authCode) => api.post('/auth/vendor/signin', { phone, authCode });
+const requestSignIn = (phone = VENDOR_PHONE) =>
+  api.post('/auth/vendor/signin/otp/request', { phone });
+const verifySignIn = (code, phone = VENDOR_PHONE) =>
+  api.post('/auth/vendor/signin/otp/verify', { phone, code });
 
-// Register and verify the phone; answers the registration id and the auth code shown.
-const registerAndVerify = async (overrides) => {
-  const { registrationId } = (await register(overrides)).body.data;
-  const { code } = (await verifyOtp(registrationId)).body.data;
-  return { registrationId, code };
-};
+// What a caller can see of an answer, without the parts that differ by number or by the clock.
+const visible = (res) => ({
+  status: res.status,
+  message: res.body.message,
+  code: res.body.code,
+  errors: res.body.errors,
+  dataKeys: res.body.data ? Object.keys(res.body.data).sort() : null,
+  deliveryChannel: res.body.data ? res.body.data.deliveryChannel : undefined,
+  resendAfterSeconds: res.body.data ? res.body.data.resendAfterSeconds : undefined,
+  retryAfter: res.headers['retry-after'],
+});
+
+const CHALLENGE_KEYS = ['deliveryChannel', 'expiresAt', 'maskedDestination', 'resendAfterSeconds'];
 
 beforeAll(db.connect);
 afterAll(db.disconnect);
@@ -67,6 +79,7 @@ describe('POST /auth/vendor/register', () => {
       maskedDestination: '••••••0003',
       expiresAt: expect.any(String),
       resendAfterSeconds: 30,
+      deliveryChannel: 'NONE',
     });
 
     const registration = await VendorRegistration.findById(res.body.data.registrationId);
@@ -132,7 +145,9 @@ describe('POST /auth/vendor/otp/request', () => {
     clock.advance(30500);
     const res = await requestOtp(registrationId);
     expect(res.status).toBe(200);
+    expect(Object.keys(res.body.data).sort()).toEqual(CHALLENGE_KEYS);
     expect(res.body.data.maskedDestination).toBe('••••••0003');
+    expect(res.body.data.deliveryChannel).toBe('NONE');
   });
 
   test('an unknown, malformed or lapsed registration answers 404 REGISTRATION_NOT_FOUND', async () => {
@@ -147,62 +162,10 @@ describe('POST /auth/vendor/otp/request', () => {
   });
 });
 
-describe('POST /auth/vendor/otp/verify', () => {
-  test('answers the permanent auth code once, as a 6-digit string, without signing in', async () => {
+describe('POST /auth/vendor/otp/verify (registration)', () => {
+  test('creates the vendor ACTIVE + APPROVED and answers the vendor session; no auth code anywhere', async () => {
     const { registrationId } = (await register()).body.data;
     const res = await verifyOtp(registrationId);
-
-    expect(res.status).toBe(200);
-    expect(Object.keys(res.body.data).sort()).toEqual(['code', 'issuedAt']);
-    expect(res.body.data.code).toMatch(/^\d{6}$/);
-    expect(new Date(res.body.data.issuedAt).toISOString()).toBe(res.body.data.issuedAt);
-    expect(res.body.data.token).toBeUndefined();
-
-    const registration = await VendorRegistration.findById(registrationId).select('+authCodeHash');
-    expect(registration.state).toBe('CODE_ISSUED');
-    expect(registration.authCodeHash).toMatch(/^\$2[aby]\$/);
-    expect(await Vendor.countDocuments()).toBe(0);
-  });
-
-  test('keeps a leading zero', async () => {
-    jest.spyOn(secretCode, 'generateNumericCode').mockReturnValue('004217');
-    const { registrationId, code } = await registerAndVerify();
-    expect(code).toBe('004217');
-    expect((await confirm(registrationId, '004217')).status).toBe(200);
-    expect((await signIn(PHONE, '004217')).status).toBe(200);
-  });
-
-  test('wrong code, too many attempts and expiry answer the OTP codes', async () => {
-    const { registrationId } = (await register()).body.data;
-
-    const wrong = await verifyOtp(registrationId, '000000');
-    expect(wrong.status).toBe(400);
-    expect(wrong.body.code).toBe('OTP_INVALID');
-
-    for (let i = 0; i < 3; i += 1) await verifyOtp(registrationId, '000000');
-    const fifth = await verifyOtp(registrationId, '000000');
-    expect(fifth.status).toBe(429);
-    expect(fifth.body.code).toBe('OTP_TOO_MANY_ATTEMPTS');
-
-    clock.advance(31000);
-    await requestOtp(registrationId);
-    clock.advance(5 * 60 * 1000 + 1000);
-    const expired = await verifyOtp(registrationId);
-    expect(expired.status).toBe(400);
-    expect(expired.body.code).toBe('OTP_EXPIRED');
-  });
-
-  test('an unknown registration answers 404 REGISTRATION_NOT_FOUND', async () => {
-    const res = await verifyOtp('aaaaaaaaaaaaaaaaaaaaaaaa');
-    expect(res.status).toBe(404);
-    expect(res.body.code).toBe('REGISTRATION_NOT_FOUND');
-  });
-});
-
-describe('POST /auth/vendor/auth-code/confirm', () => {
-  test('the shown code signs the vendor in and creates them ACTIVE + APPROVED', async () => {
-    const { registrationId, code } = await registerAndVerify();
-    const res = await confirm(registrationId, code);
 
     expect(res.status).toBe(200);
     const { data } = res.body;
@@ -221,250 +184,446 @@ describe('POST /auth/vendor/auth-code/confirm', () => {
       role: 'VENDOR',
     });
 
-    const vendor = await Vendor.findById(data.user.id);
+    const vendor = await Vendor.findById(data.user.id).select('+authCodeHash');
     expect(vendor).toMatchObject({
       businessName: 'Sharma Plumbing',
       ownerName: 'Anil Sharma',
       status: 'ACTIVE',
       approvalStatus: 'APPROVED',
+      authCodeHash: null,
+      authCodeIssuedAt: null,
     });
+    expect(vendor.phoneVerifiedAt).toBeInstanceOf(Date);
     expect(vendor.categoryIds.map(String).sort()).toEqual(categories.map((c) => String(c._id)).sort());
-    expect((await VendorRegistration.findById(registrationId)).state).toBe('COMPLETED');
+
+    const registration = await VendorRegistration.findById(registrationId).select('+authCodeHash');
+    expect(registration.state).toBe('COMPLETED');
+    expect(String(registration.vendorId)).toBe(data.user.id);
+    expect(registration.authCodeHash).toBeNull();
 
     const me = await api.get('/auth/me', data.token);
+    expect(me.status).toBe(200);
     expect(me.body.data).toMatchObject(data.user);
   });
 
-  // Not signed in yet, so a mismatch is a 400 — never a 401 that could read as an expired session.
-  test('a wrong code answers 400 AUTH_CODE_INVALID and creates nothing', async () => {
-    const { registrationId, code } = await registerAndVerify();
-    const wrong = code === '111111' ? '222222' : '111111';
-    const res = await confirm(registrationId, wrong);
-    expect(res.status).toBe(400);
-    expect(res.body).toEqual({
-      success: false,
-      message: 'That code does not match the one shown.',
-      code: 'AUTH_CODE_INVALID',
-      errors: null,
-      data: null,
-    });
-    expect(await Vendor.countDocuments()).toBe(0);
-  });
-
-  test('before the phone is verified any code answers 400 AUTH_CODE_INVALID', async () => {
+  test('wrong code, too many attempts and expiry answer the OTP codes and create nothing', async () => {
     const { registrationId } = (await register()).body.data;
-    const res = await confirm(registrationId, '123456');
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe('AUTH_CODE_INVALID');
-  });
 
-  test('the fifth wrong code answers 429 OTP_TOO_MANY_ATTEMPTS until the code is regenerated', async () => {
-    jest
-      .spyOn(secretCode, 'generateNumericCode')
-      .mockReturnValueOnce('640011')
-      .mockReturnValueOnce('640022');
-    const { registrationId } = await registerAndVerify();
+    const wrong = await verifyOtp(registrationId, '000000');
+    expect(wrong.status).toBe(400);
+    expect(wrong.body.code).toBe('OTP_INVALID');
 
-    for (let i = 0; i < 4; i += 1) {
-      const res = await confirm(registrationId, '000000');
-      expect(res.status).toBe(400);
-      expect(res.body.code).toBe('AUTH_CODE_INVALID');
-    }
-    const fifth = await confirm(registrationId, '000000');
+    for (let i = 0; i < 3; i += 1) await verifyOtp(registrationId, '000000');
+    const fifth = await verifyOtp(registrationId, '000000');
     expect(fifth.status).toBe(429);
     expect(fifth.body.code).toBe('OTP_TOO_MANY_ATTEMPTS');
+    expect((await verifyOtp(registrationId)).body.code).toBe('OTP_TOO_MANY_ATTEMPTS');
 
-    // Locked: even the code that was shown is refused now.
-    const right = await confirm(registrationId, '640011');
-    expect(right.status).toBe(429);
-    expect(right.body.code).toBe('OTP_TOO_MANY_ATTEMPTS');
+    clock.advance(31000);
+    await requestOtp(registrationId);
+    clock.advance(5 * MINUTE + 1000);
+    const expired = await verifyOtp(registrationId);
+    expect(expired.status).toBe(400);
+    expect(expired.body.code).toBe('OTP_EXPIRED');
     expect(await Vendor.countDocuments()).toBe(0);
-
-    // Regenerating issues a fresh code with a fresh allowance.
-    const { code } = (await regenerate(registrationId)).body.data;
-    expect(code).toBe('640022');
-    expect((await confirm(registrationId, '000000')).status).toBe(400);
-    expect((await confirm(registrationId, '640022')).status).toBe(200);
   });
 
-  test('a registration saved before the attempt counter existed can still be confirmed', async () => {
-    const { registrationId, code } = await registerAndVerify();
-    await VendorRegistration.collection.updateOne(
-      { _id: VendorRegistration.castObject({ _id: registrationId })._id },
-      { $unset: { confirmAttempts: '' } }
-    );
-    expect((await confirm(registrationId, code)).status).toBe(200);
+  test('an unknown registration answers 404 REGISTRATION_NOT_FOUND', async () => {
+    const res = await verifyOtp('aaaaaaaaaaaaaaaaaaaaaaaa');
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('REGISTRATION_NOT_FOUND');
   });
 
-  test('four wrong codes then the right one still confirms', async () => {
-    const { registrationId, code } = await registerAndVerify();
-    const wrong = code === '111111' ? '222222' : '111111';
-    for (let i = 0; i < 4; i += 1) {
-      await confirm(registrationId, wrong);
-    }
-    expect((await confirm(registrationId, code)).status).toBe(200);
-  });
+  test('a finished registration cannot be verified again', async () => {
+    const { registrationId } = (await register()).body.data;
+    expect((await verifyOtp(registrationId)).status).toBe(200);
 
-  test('parallel wrong guesses cannot get past the confirm limit', async () => {
-    const { registrationId, code } = await registerAndVerify();
-    const guesses = Array.from({ length: 12 }, (_, i) => String(300000 + i)).filter(
-      (guess) => guess !== code
-    );
-    const results = await Promise.all(guesses.map((guess) => confirm(registrationId, guess)));
-    expect(results.filter((r) => r.body.code === 'AUTH_CODE_INVALID').length).toBeLessThanOrEqual(4);
-    expect((await VendorRegistration.findById(registrationId)).confirmAttempts).toBe(5);
-    expect((await confirm(registrationId, code)).body.code).toBe('OTP_TOO_MANY_ATTEMPTS');
-  });
-
-  test('a finished registration cannot be confirmed again or regenerated', async () => {
-    const { registrationId, code } = await registerAndVerify();
-    expect((await confirm(registrationId, code)).status).toBe(200);
-
-    const again = await confirm(registrationId, code);
+    const again = await verifyOtp(registrationId);
     expect(again.status).toBe(404);
     expect(again.body.code).toBe('REGISTRATION_NOT_FOUND');
-    expect((await regenerate(registrationId)).body.code).toBe('REGISTRATION_NOT_FOUND');
+    expect((await requestOtp(registrationId)).body.code).toBe('REGISTRATION_NOT_FOUND');
     expect(await Vendor.countDocuments()).toBe(1);
   });
 
   test('a double tap creates one vendor', async () => {
-    const { registrationId, code } = await registerAndVerify();
-    const results = await Promise.all([confirm(registrationId, code), confirm(registrationId, code)]);
+    const { registrationId } = (await register()).body.data;
+    const results = await Promise.all([verifyOtp(registrationId), verifyOtp(registrationId)]);
     expect(results.filter((r) => r.status === 200)).toHaveLength(1);
     expect(await Vendor.countDocuments()).toBe(1);
   });
 
   test('if another registration for the number finished first, answers 409 PHONE_ALREADY_REGISTERED', async () => {
-    const first = await registerAndVerify();
+    const first = (await register()).body.data.registrationId;
     clock.advance(31000);
-    const second = await registerAndVerify({ email: 'other@example.com' });
+    const second = (await register({ email: 'other@example.com' })).body.data.registrationId;
 
-    expect((await confirm(first.registrationId, first.code)).status).toBe(200);
-    const res = await confirm(second.registrationId, second.code);
+    expect((await verifyOtp(first)).status).toBe(200);
+    const res = await verifyOtp(second);
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('PHONE_ALREADY_REGISTERED');
+    expect(await Vendor.countDocuments()).toBe(1);
   });
 
   test('a registration older than 24 hours answers 404 REGISTRATION_NOT_FOUND', async () => {
-    const { registrationId, code } = await registerAndVerify();
-    clock.advance(24 * 60 * 60 * 1000 + 1000);
-    const res = await confirm(registrationId, code);
-    expect(res.status).toBe(404);
-    expect(res.body.code).toBe('REGISTRATION_NOT_FOUND');
-  });
-});
-
-describe('POST /auth/vendor/auth-code/regenerate', () => {
-  test('issues a different code and the old one stops working at once', async () => {
-    const { registrationId, code: oldCode } = await registerAndVerify();
-    const res = await regenerate(registrationId);
-
-    expect(res.status).toBe(200);
-    expect(Object.keys(res.body.data).sort()).toEqual(['code', 'issuedAt']);
-    expect(res.body.data.code).toMatch(/^\d{6}$/);
-    expect(res.body.data.code).not.toBe(oldCode);
-
-    const old = await confirm(registrationId, oldCode);
-    expect(old.status).toBe(400);
-    expect(old.body.code).toBe('AUTH_CODE_INVALID');
-    expect((await confirm(registrationId, res.body.data.code)).status).toBe(200);
-  });
-
-  test('never reissues the code it replaces, even when the random draw repeats it', async () => {
-    jest
-      .spyOn(secretCode, 'generateNumericCode')
-      .mockReturnValueOnce('555555')
-      .mockReturnValueOnce('555555')
-      .mockReturnValueOnce('777777');
-    const { registrationId, code } = await registerAndVerify();
-    expect(code).toBe('555555');
-    expect((await regenerate(registrationId)).body.data.code).toBe('777777');
-  });
-
-  test('before the phone is verified answers 404 REGISTRATION_NOT_FOUND', async () => {
     const { registrationId } = (await register()).body.data;
-    const res = await regenerate(registrationId);
+    clock.advance(24 * 60 * 60 * 1000 + 1000);
+    const res = await verifyOtp(registrationId);
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('REGISTRATION_NOT_FOUND');
   });
-});
 
-describe('POST /auth/vendor/signin', () => {
-  const REFUSAL = {
-    success: false,
-    message: 'Those sign-in details were not recognised.',
-    code: 'AUTH_CODE_INVALID',
-    errors: null,
-    data: null,
-  };
+  // A registration whose phone was verified under the removed flow (shown an auth code, never
+  // confirmed) can still finish: a new code and its verification complete it.
+  test('a legacy CODE_ISSUED registration completes after a resend', async () => {
+    const { registrationId } = (await register()).body.data;
+    await VendorRegistration.updateOne({ _id: registrationId }, { $set: { state: 'CODE_ISSUED' } });
+    await OtpChallenge.updateMany({}, { $set: { consumedAt: new Date() } });
 
-  test('phone + auth code signs a vendor in', async () => {
-    const vendor = await createPhoneVendor({ phone: '9000000001', authCode: '482913' });
-    const res = await signIn('9000000001', '482913');
-
+    expect((await verifyOtp(registrationId)).body.code).toBe('OTP_EXPIRED');
+    clock.advance(31000);
+    expect((await requestOtp(registrationId)).status).toBe(200);
+    const res = await verifyOtp(registrationId);
     expect(res.status).toBe(200);
     expect(res.body.data.role).toBe('VENDOR');
-    expect(res.body.data.user).toEqual({
+  });
+
+  test('a vendor who registered signs in later with a new one-time code', async () => {
+    const { registrationId } = (await register()).body.data;
+    const registered = (await verifyOtp(registrationId)).body.data;
+
+    expect((await requestSignIn(PHONE)).status).toBe(200);
+    const res = await verifySignIn(OTP, PHONE);
+    expect(res.status).toBe(200);
+    expect(res.body.data.user).toEqual(registered.user);
+  });
+});
+
+describe('POST /auth/vendor/signin/otp/request', () => {
+  test('answers the challenge, with the channel used, for a vendor', async () => {
+    await createPhoneVendor({ phone: VENDOR_PHONE });
+    const before = Date.now();
+    const res = await requestSignIn();
+
+    expect(res.status).toBe(200);
+    expect(res.body.message).toBe('Verification code sent.');
+    expect(Object.keys(res.body.data).sort()).toEqual(CHALLENGE_KEYS);
+    expect(res.body.data).toMatchObject({
+      maskedDestination: '••••••0001',
+      resendAfterSeconds: 30,
+      deliveryChannel: 'NONE',
+    });
+    const expiresAt = Date.parse(res.body.data.expiresAt);
+    expect(expiresAt).toBeGreaterThanOrEqual(before + 5 * MINUTE);
+    expect(expiresAt).toBeLessThanOrEqual(Date.now() + 5 * MINUTE);
+  });
+
+  test('answers the same for a vendor, an unknown, a suspended, a deleted and an unproven number', async () => {
+    await createPhoneVendor({ phone: VENDOR_PHONE });
+    await createPhoneVendor({ phone: '9000000005', status: 'BLOCKED' });
+    await createPhoneVendor({ phone: '9000000006', isDeleted: true });
+    await createPhoneVendor({ phone: '9000000007', phoneVerifiedAt: null });
+
+    const answers = [];
+    for (const phone of [VENDOR_PHONE, UNKNOWN_PHONE, '9000000005', '9000000006', '9000000007']) {
+      answers.push(visible(await requestSignIn(phone)));
+    }
+    for (const answer of answers) {
+      expect(answer).toEqual(answers[0]);
+    }
+    expect(answers[0]).toMatchObject({ status: 200, dataKeys: CHALLENGE_KEYS });
+  });
+
+  test('a code is delivered only to a vendor that can sign in; a suspended vendor still gets one', async () => {
+    await createPhoneVendor({ phone: VENDOR_PHONE });
+    await createPhoneVendor({ phone: '9000000005', status: 'BLOCKED' });
+    await createPhoneVendor({ phone: '9000000006', isDeleted: true });
+    await createPhoneVendor({ phone: '9000000007', phoneVerifiedAt: null });
+    const deliver = jest.spyOn(otpDelivery, 'deliver');
+
+    for (const phone of [VENDOR_PHONE, UNKNOWN_PHONE, '9000000005', '9000000006', '9000000007']) {
+      await requestSignIn(phone);
+    }
+
+    expect(deliver.mock.calls.map(([args]) => args.phone)).toEqual([VENDOR_PHONE, '9000000005']);
+    const text = logs.all();
+    expect(text).toContain('otp issued for ••••0001');
+    expect(text).not.toContain('otp issued for ••••1111');
+    expect(text).toContain('vendor sign-in code asked for ••••1111: no vendor account, none sent');
+  });
+
+  test('the resend wait applies to a vendor and an unknown number alike', async () => {
+    await createPhoneVendor({ phone: VENDOR_PHONE });
+    for (const phone of [VENDOR_PHONE, UNKNOWN_PHONE]) {
+      await requestSignIn(phone);
+    }
+    clock.advance(29000);
+    const known = await requestSignIn(VENDOR_PHONE);
+    const unknown = await requestSignIn(UNKNOWN_PHONE);
+    expect(visible(unknown)).toEqual(visible(known));
+    expect(known.status).toBe(429);
+    expect(known.body.code).toBe('OTP_RESEND_TOO_SOON');
+
+    clock.advance(1500);
+    expect((await requestSignIn(VENDOR_PHONE)).status).toBe(200);
+    expect((await requestSignIn(UNKNOWN_PHONE)).status).toBe(200);
+  });
+
+  test('the daily cap of 10 codes applies to a vendor and an unknown number alike', async () => {
+    await createPhoneVendor({ phone: VENDOR_PHONE });
+    for (let i = 0; i < 10; i += 1) {
+      expect((await requestSignIn(VENDOR_PHONE)).status).toBe(200);
+      expect((await requestSignIn(UNKNOWN_PHONE)).status).toBe(200);
+      clock.advance(31000);
+    }
+    const known = await requestSignIn(VENDOR_PHONE);
+    const unknown = await requestSignIn(UNKNOWN_PHONE);
+    expect(known.status).toBe(429);
+    expect(known.body.code).toBe('RATE_LIMITED');
+    // Each number's day started at its own first request, a few milliseconds apart, so the
+    // Retry-After seconds may round one apart; everything else is identical.
+    expect({ ...visible(unknown), retryAfter: null }).toEqual({ ...visible(known), retryAfter: null });
+    expect(
+      Math.abs(Number(unknown.headers['retry-after']) - Number(known.headers['retry-after']))
+    ).toBeLessThanOrEqual(1);
+  });
+
+  test('a phone that is not 7 to 15 digits answers VALIDATION_FAILED', async () => {
+    const res = await requestSignIn('98765abc10');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_FAILED');
+    expect(res.body.errors[0].field).toBe('phone');
+  });
+});
+
+describe('POST /auth/vendor/signin/otp/verify', () => {
+  test('the right code answers the vendor session', async () => {
+    const vendor = await createPhoneVendor({ phone: VENDOR_PHONE });
+    await requestSignIn();
+    const res = await verifySignIn(OTP);
+
+    expect(res.status).toBe(200);
+    expect(res.body.message).toBe('Vendor signed in successfully.');
+    const { data } = res.body;
+    expect(Object.keys(data).sort()).toEqual(['role', 'token', 'user']);
+    expect(data.role).toBe('VENDOR');
+    expect(data.user).toEqual({
       id: String(vendor._id),
       firstName: 'Ravi',
       lastName: 'Kumar',
-      phone: '9000000001',
+      phone: VENDOR_PHONE,
       role: 'vendor',
     });
+    const payload = jwt.verify(data.token, process.env.JWT_SECRET);
+    expect(payload).toMatchObject({ id: String(vendor._id), role: 'VENDOR', v: 0 });
+
+    const me = await api.get('/auth/me', data.token);
+    expect(me.status).toBe(200);
+    expect(me.body.data).toMatchObject(data.user);
   });
 
   test('accepts a formatted phone and a spaced or hyphenated code', async () => {
-    await createPhoneVendor({ phone: '9000000001', authCode: '482913' });
-    expect((await signIn('(900) 000-0001', '482 913')).status).toBe(200);
-    expect((await signIn('900-000-0001', '482-913')).status).toBe(200);
+    await createPhoneVendor({ phone: VENDOR_PHONE });
+    await requestSignIn('(900) 000-0001');
+    expect((await verifySignIn('123 456', '900-000-0001')).status).toBe(200);
+    clock.advance(31000);
+    await requestSignIn('900-000-0001');
+    expect((await verifySignIn('123-456', '9000000001')).status).toBe(200);
   });
 
-  test('wrong code, unknown phone and revoked code get one identical 401', async () => {
-    const vendor = await createPhoneVendor({ phone: '9000000001', authCode: '482913' });
-    await createPhoneVendor({ phone: '9000000004', authCode: null });
+  test('a wrong code answers 400 OTP_INVALID; the fifth kills the code with 429 OTP_TOO_MANY_ATTEMPTS', async () => {
+    await createPhoneVendor({ phone: VENDOR_PHONE });
+    await requestSignIn();
+    for (let i = 0; i < 4; i += 1) {
+      const res = await verifySignIn('000000');
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({
+        success: false,
+        message: 'The code entered is not correct.',
+        code: 'OTP_INVALID',
+        errors: null,
+        data: null,
+      });
+    }
+    const fifth = await verifySignIn('000000');
+    expect(fifth.status).toBe(429);
+    expect(fifth.body.code).toBe('OTP_TOO_MANY_ATTEMPTS');
+    expect((await verifySignIn(OTP)).body.code).toBe('OTP_TOO_MANY_ATTEMPTS');
 
-    const wrongCode = await signIn('9000000001', '482914');
-    const unknownPhone = await signIn('9111111111', '482913');
-    const noCodeIssued = await signIn('9000000004', '482913');
+    clock.advance(31000);
+    await requestSignIn();
+    expect((await verifySignIn(OTP)).status).toBe(200);
+  });
 
-    await Vendor.updateOne({ _id: vendor._id }, { authCodeHash: null });
-    const revoked = await signIn('9000000001', '482913');
+  test('a code past its 5 minutes answers OTP_EXPIRED; no request at all answers OTP_EXPIRED', async () => {
+    await createPhoneVendor({ phone: VENDOR_PHONE });
+    expect((await verifySignIn(OTP)).body.code).toBe('OTP_EXPIRED');
 
-    for (const res of [wrongCode, unknownPhone, noCodeIssued, revoked]) {
-      expect(res.status).toBe(401);
-      expect(res.body).toEqual(REFUSAL);
+    await requestSignIn();
+    clock.advance(5 * MINUTE + 1000);
+    const res = await verifySignIn(OTP);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('OTP_EXPIRED');
+  });
+
+  test('a code signs in once: using it again answers OTP_EXPIRED', async () => {
+    await createPhoneVendor({ phone: VENDOR_PHONE });
+    await requestSignIn();
+    expect((await verifySignIn(OTP)).status).toBe(200);
+    expect((await verifySignIn(OTP)).body.code).toBe('OTP_EXPIRED');
+  });
+
+  test('an unknown number answers OTP_INVALID even for the static code', async () => {
+    await requestSignIn(UNKNOWN_PHONE);
+    const res = await verifySignIn(OTP, UNKNOWN_PHONE);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('OTP_INVALID');
+  });
+
+  test('an unknown number answers every attempt exactly as a vendor with wrong codes does', async () => {
+    await createPhoneVendor({ phone: VENDOR_PHONE });
+    const run = async (phone) => {
+      const answers = [visible(await verifySignIn('000000', phone))];
+      await requestSignIn(phone);
+      for (let i = 0; i < 6; i += 1) {
+        answers.push(visible(await verifySignIn(String(700100 + i), phone)));
+      }
+      return answers;
+    };
+
+    const known = await run(VENDOR_PHONE);
+    const unknown = await run(UNKNOWN_PHONE);
+    expect(unknown).toEqual(known);
+    expect(known.map((a) => a.code)).toEqual([
+      'OTP_EXPIRED',
+      'OTP_INVALID',
+      'OTP_INVALID',
+      'OTP_INVALID',
+      'OTP_INVALID',
+      'OTP_TOO_MANY_ATTEMPTS',
+      'OTP_TOO_MANY_ATTEMPTS',
+    ]);
+  });
+
+  test('a deleted vendor and an unproven (email sign-up) vendor are refused like an unknown number', async () => {
+    await createPhoneVendor({ phone: '9000000006', isDeleted: true });
+    await createPhoneVendor({ phone: '9000000007', phoneVerifiedAt: null, email: 'squat@example.com' });
+
+    for (const phone of ['9000000006', '9000000007']) {
+      await requestSignIn(phone);
+      const res = await verifySignIn(OTP, phone);
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('OTP_INVALID');
+    }
+    const unproven = await Vendor.findOne({ phone: '9000000007' });
+    expect(unproven.phoneVerifiedAt).toBeNull();
+    expect(unproven.email).toBe('squat@example.com');
+  });
+
+  test('a vendor deleted after the code was sent is refused as a wrong code', async () => {
+    const vendor = await createPhoneVendor({ phone: VENDOR_PHONE });
+    await requestSignIn();
+    await Vendor.updateOne({ _id: vendor._id }, { isDeleted: true, deletedAt: new Date() });
+    const res = await verifySignIn(OTP);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('OTP_INVALID');
+  });
+
+  test('a suspended vendor gets 403 ACCOUNT_SUSPENDED, but only after a right code', async () => {
+    for (const [phone, status] of [
+      ['9000000005', 'BLOCKED'],
+      ['9000000008', 'INACTIVE'],
+    ]) {
+      await createPhoneVendor({ phone, status });
+      await requestSignIn(phone);
+      expect((await verifySignIn('000000', phone)).body.code).toBe('OTP_INVALID');
+
+      const res = await verifySignIn(OTP, phone);
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('ACCOUNT_SUSPENDED');
+      expect(res.body.data).toBeNull();
     }
   });
 
-  test('a soft-deleted vendor is refused like an unknown phone', async () => {
-    await createPhoneVendor({ phone: '9000000001', authCode: '482913', isDeleted: true });
-    const res = await signIn('9000000001', '482913');
-    expect(res.status).toBe(401);
-    expect(res.body).toEqual(REFUSAL);
-  });
-
-  test('a suspended vendor gets 403 ACCOUNT_SUSPENDED only with the right code', async () => {
-    await createPhoneVendor({ phone: '9000000001', authCode: '482913', status: 'BLOCKED' });
-
-    const wrong = await signIn('9000000001', '000000');
-    expect(wrong.status).toBe(401);
-    expect(wrong.body).toEqual(REFUSAL);
-
-    const right = await signIn('9000000001', '482913');
-    expect(right.status).toBe(403);
-    expect(right.body.code).toBe('ACCOUNT_SUSPENDED');
-  });
-
-  test('a vendor who registered by phone signs in later with the code they were shown', async () => {
-    const { registrationId, code } = await registerAndVerify();
-    await confirm(registrationId, code);
-    expect((await signIn(PHONE, code)).status).toBe(200);
-  });
-
-  test('a code that is not 6 digits answers VALIDATION_FAILED', async () => {
-    const res = await signIn('9000000001', '48291');
+  test('a code that is not 6 digits answers VALIDATION_FAILED and costs no attempt', async () => {
+    await createPhoneVendor({ phone: VENDOR_PHONE });
+    await requestSignIn();
+    const res = await verifySignIn('48291');
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VALIDATION_FAILED');
-    expect(res.body.errors[0].field).toBe('authCode');
+    expect(res.body.errors[0].field).toBe('code');
+    const challenge = await OtpChallenge.findOne({ phone: VENDOR_PHONE, purpose: 'VENDOR_SIGN_IN' });
+    expect(challenge.attempts).toBe(0);
+  });
+
+  test('a sign-in code and a customer code for the same number are separate', async () => {
+    await createPhoneVendor({ phone: VENDOR_PHONE });
+    await requestSignIn();
+    expect((await api.post('/auth/customer/otp/request', { phone: VENDOR_PHONE })).status).toBe(200);
+    expect((await verifySignIn(OTP)).status).toBe(200);
+    const customer = await api.post('/auth/customer/otp/verify', { phone: VENDOR_PHONE, code: OTP });
+    expect(customer.body.data.role).toBe('CUSTOMER');
+  });
+});
+
+describe('the static code (OTP_STATIC_CODE) on vendor sign in', () => {
+  const withNodeEnv = async (value, run) => {
+    const previous = process.env.NODE_ENV;
+    process.env.NODE_ENV = value;
+    try {
+      await run();
+    } finally {
+      process.env.NODE_ENV = previous;
+    }
+  };
+
+  test('works in development', async () => {
+    await createPhoneVendor({ phone: VENDOR_PHONE });
+    await withNodeEnv('development', async () => {
+      const random = jest.spyOn(secretCode, 'generateNumericCode');
+      await requestSignIn();
+      expect(random).not.toHaveBeenCalled();
+      expect((await verifySignIn(OTP)).status).toBe(200);
+    });
+  });
+
+  test.each([['production'], ['staging']])('is ignored in %s: the code is random', async (env) => {
+    await createPhoneVendor({ phone: VENDOR_PHONE });
+    await withNodeEnv(env, async () => {
+      jest.spyOn(secretCode, 'generateNumericCode').mockReturnValue('590214');
+      await requestSignIn();
+      expect((await verifySignIn(OTP)).body.code).toBe('OTP_INVALID');
+      expect((await verifySignIn('590214')).status).toBe(200);
+    });
+  });
+
+  test('is never the code of an unknown number’s stand-in challenge', async () => {
+    const random = jest.spyOn(secretCode, 'generateNumericCode').mockReturnValue('640011');
+    await requestSignIn(UNKNOWN_PHONE);
+    expect(random).toHaveBeenCalledTimes(1);
+    expect((await verifySignIn(OTP, UNKNOWN_PHONE)).body.code).toBe('OTP_INVALID');
+  });
+});
+
+describe('the removed auth-code routes (Phase 5 contract §1.3)', () => {
+  test('answer the router’s 404 NOT_FOUND', async () => {
+    await createPhoneVendor({ phone: VENDOR_PHONE });
+    const { registrationId } = (await register()).body.data;
+    const calls = [
+      ['/auth/vendor/signin', { phone: VENDOR_PHONE, authCode: '482913' }],
+      ['/auth/vendor/auth-code/confirm', { registrationId, authCode: '482913' }],
+      ['/auth/vendor/auth-code/regenerate', { registrationId }],
+      ['/vendors/auth-code/regenerate', { id: 'aaaaaaaaaaaaaaaaaaaaaaaa' }],
+    ];
+    for (const [path, body] of calls) {
+      const res = await api.post(path, body);
+      expect({ path, status: res.status }).toEqual({ path, status: 404 });
+      expect(res.body).toEqual({
+        success: false,
+        message: `Endpoint /api/v1${path} not found.`,
+        code: 'NOT_FOUND',
+        errors: null,
+        data: null,
+      });
+    }
   });
 });

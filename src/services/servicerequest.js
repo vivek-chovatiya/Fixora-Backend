@@ -5,7 +5,7 @@ const Category = require('../models/category');
 const SubCategory = require('../models/subcategory');
 const TeamMember = require('../models/team');
 const Vendor = require('../models/vendor');
-const Notification = require('../models/notification');
+const notificationService = require('./notification');
 const ApiError = require('../utils/ApiError');
 const clock = require('../utils/clock');
 const logger = require('../utils/logger');
@@ -168,11 +168,12 @@ const describeRequest = async (request) => {
   };
 };
 
-// A notification is a courtesy; failing to save one must not undo the change it describes.
+// A notification is a courtesy; failing to save one must not undo the change it describes. It is
+// created through NotificationService, the one place that also pushes it (Phase 5 contract §6.2).
 const notify = async (request, recipient, message) => {
   try {
     const words = await describeRequest(request);
-    await Notification.create({
+    await notificationService.createNotification({
       userId: recipient.userId,
       userRole: recipient.userRole,
       title: message.title,

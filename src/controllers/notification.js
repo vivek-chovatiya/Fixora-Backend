@@ -28,6 +28,24 @@ class NotificationController {
       next(error);
     }
   }
+
+  async markAllAsRead(req, res, next) {
+    try {
+      const result = await notificationService.markAllAsRead(req.user);
+      return ApiResponse.success(res, 'All notifications marked as read.', result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async removeAll(req, res, next) {
+    try {
+      const result = await notificationService.deleteAllNotifications(req.user);
+      return ApiResponse.success(res, 'All notifications deleted.', result);
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 module.exports = new NotificationController();

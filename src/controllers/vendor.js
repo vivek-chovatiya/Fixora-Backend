@@ -1,5 +1,4 @@
 const vendorService = require('../services/vendor');
-const vendorAuthService = require('../services/vendorauth');
 const ApiResponse = require('../utils/ApiResponse');
 const { assertSelfOrAdmin, withoutAdminFields } = require('../utils/ownership');
 
@@ -61,17 +60,6 @@ class VendorController {
     try {
       await vendorService.deleteVendor(req.body.id);
       return ApiResponse.success(res, 'Vendor deleted successfully.', null);
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  // The response carries the new auth code so the administrator can pass it on; the old code
-  // stops working at once.
-  async regenerateAuthCode(req, res, next) {
-    try {
-      const authCode = await vendorAuthService.reissueAuthCode(req.body.id);
-      return ApiResponse.success(res, 'Vendor auth code reissued.', authCode);
     } catch (error) {
       next(error);
     }

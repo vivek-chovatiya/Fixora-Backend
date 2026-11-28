@@ -1,7 +1,7 @@
 /**
  * Phone numbers, normalised one way everywhere.
  *
- * Phone is the identifier for both mobile roles (customer one-time code, vendor auth code), so
+ * Phone is the identifier for both mobile roles (both sign in by one-time code), so
  * '+91 98765-43210', '919876543210' and '(919) 876 543 210' must be one number. The contract fixes
  * the rule: digits only after stripping spaces, '+', '-' and brackets; 7 to 15 digits. Accounts
  * store and compare the normalised value, and uniqueness is per role on that value.

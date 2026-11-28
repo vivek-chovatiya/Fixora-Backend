@@ -89,14 +89,9 @@ const getById = {
   }),
 };
 
-// Administrator reissue of a vendor's permanent auth code (PROJECT_BIBLE.md section 7A.2,
-// amended 21/10/2026).
-const regenerateAuthCode = getById;
-
 module.exports = {
   updateVendor,
   updateApprovalStatus,
   listVendors,
   getById,
-  regenerateAuthCode,
 };

@@ -21,6 +21,7 @@ const reviewController = require('../controllers/review');
 const notificationController = require('../controllers/notification');
 const adminController = require('../controllers/admin');
 const uploadController = require('../controllers/upload');
+const deviceController = require('../controllers/device');
 
 // Validations
 const authValidation = require('../validations/auth');
@@ -35,6 +36,7 @@ const reviewValidation = require('../validations/review');
 const adminValidation = require('../validations/admin');
 const notificationValidation = require('../validations/notification');
 const uploadValidation = require('../validations/upload');
+const deviceValidation = require('../validations/device');
 
 // ----------------------------------------------------
 // Health Check
@@ -60,8 +62,9 @@ router.post(
 router.get('/auth/me', authenticate, authController.me);
 router.post('/auth/logout', authenticate, authController.logout);
 
-// Phone sign in — customer one-time code, vendor registration and permanent auth code
-// (shared contract, owner decision 17/11/2026; PROJECT_BIBLE.md section 7A)
+// Phone sign in by one-time code — customer, vendor registration and vendor sign in (shared
+// contract, owner decision 17/11/2026; PROJECT_BIBLE.md section 7A). The vendor's permanent auth
+// code and its routes were removed by the Phase 5 contract §1 (owner decision 28/11/2026).
 router.post(
   '/auth/customer/otp/request',
   validate(authValidation.requestCustomerOtp),
@@ -88,19 +91,14 @@ router.post(
   authController.verifyVendorOtp
 );
 router.post(
-  '/auth/vendor/auth-code/confirm',
-  validate(authValidation.confirmVendorAuthCode),
-  authController.confirmVendorAuthCode
+  '/auth/vendor/signin/otp/request',
+  validate(authValidation.requestVendorSignInOtp),
+  authController.requestVendorSignInOtp
 );
 router.post(
-  '/auth/vendor/auth-code/regenerate',
-  validate(authValidation.regenerateVendorAuthCode),
-  authController.regenerateVendorAuthCode
-);
-router.post(
-  '/auth/vendor/signin',
-  validate(authValidation.signInVendor),
-  authController.signInVendor
+  '/auth/vendor/signin/otp/verify',
+  validate(authValidation.verifyVendorSignInOtp),
+  authController.verifyVendorSignInOtp
 );
 
 // ----------------------------------------------------
@@ -171,13 +169,6 @@ router.delete(
   authorize(['ADMIN']),
   validate(vendorValidation.getById),
   vendorController.remove
-);
-router.post(
-  '/vendors/auth-code/regenerate',
-  authenticate,
-  authorize(['ADMIN']),
-  validate(vendorValidation.regenerateAuthCode),
-  vendorController.regenerateAuthCode
 );
 // The signed-in vendor's own report, counted from the requests (Phase 4B contract §5)
 router.post(
@@ -457,6 +448,19 @@ router.post(
   validate(notificationValidation.deleteNotification),
   notificationController.remove
 );
+// The caller's whole inbox at once: mark every unread read, or clear it (Phase 5 contract §3)
+router.post(
+  '/notifications/read-all',
+  authenticate,
+  validate(notificationValidation.markAllAsRead),
+  notificationController.markAllAsRead
+);
+router.post(
+  '/notifications/delete-all',
+  authenticate,
+  validate(notificationValidation.deleteAllNotifications),
+  notificationController.removeAll
+);
 
 // ----------------------------------------------------
 // Upload Routes (Phase 4B contract §1)
@@ -470,6 +474,26 @@ router.post(
   receiveUploadFiles,
   validate(uploadValidation.createUpload),
   uploadController.create
+);
+
+// ----------------------------------------------------
+// Device Routes (Phase 5 contract §6.1)
+// ----------------------------------------------------
+// The signed-in customer's or vendor's push token. Stored even while push sending is off, so the
+// tokens are ready the day Firebase is configured.
+router.post(
+  '/devices/register',
+  authenticate,
+  authorize(['CUSTOMER', 'VENDOR']),
+  validate(deviceValidation.registerDevice),
+  deviceController.register
+);
+router.post(
+  '/devices/unregister',
+  authenticate,
+  authorize(['CUSTOMER', 'VENDOR']),
+  validate(deviceValidation.unregisterDevice),
+  deviceController.unregister
 );
 
 // ----------------------------------------------------

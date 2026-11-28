@@ -1,9 +1,11 @@
-// Optional fields (requests contract §7): address book city/state/pincode, team member phone.
+// Optional fields (requests contract §7): address book city/state/pincode, team member phone; and
+// the team member's role (`designation`, Phase 5 contract §4).
 const logs = require('./helpers/logs');
 const api = require('./helpers/api');
 const db = require('./helpers/db');
 const f = require('./helpers/fixtures');
 const Address = require('../src/models/address');
+const TeamMember = require('../src/models/team');
 
 let customerToken;
 let vendorToken;
@@ -106,5 +108,65 @@ describe('team members', () => {
     const res = await api.post('/team', { designation: 'Plumber' }, vendorToken);
     expect(res.status).toBe(400);
     expect(res.body.errors[0].field).toBe('name');
+  });
+});
+
+describe('team member role (designation) is optional (Phase 5 contract §4)', () => {
+  test('left out, empty, blank or null on create: stored as "", never a default role', async () => {
+    for (const body of [{}, { designation: '' }, { designation: '   ' }, { designation: null }]) {
+      const res = await api.post('/team', { name: 'Suresh', ...body }, vendorToken);
+      expect({ body, status: res.status }).toEqual({ body, status: 201 });
+      expect(res.body.data.designation).toBe('');
+      expect((await TeamMember.findById(res.body.data.id)).designation).toBe('');
+    }
+  });
+
+  test('a role given on create is kept, trimmed', async () => {
+    const res = await api.post('/team', { name: 'Suresh', designation: '  Electrician ' }, vendorToken);
+    expect(res.body.data.designation).toBe('Electrician');
+  });
+
+  test('on update "" or null clears it, and leaving it out keeps it', async () => {
+    const created = await api.post('/team', { name: 'Suresh', designation: 'Electrician' }, vendorToken);
+    const id = created.body.data.id;
+
+    const kept = await api.post('/team/update', { id, name: 'Suresh K' }, vendorToken);
+    expect(kept.body.data).toMatchObject({ name: 'Suresh K', designation: 'Electrician' });
+
+    const cleared = await api.post('/team/update', { id, designation: '' }, vendorToken);
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.data.designation).toBe('');
+
+    await api.post('/team/update', { id, designation: 'Plumber' }, vendorToken);
+    const nulled = await api.post('/team/update', { id, designation: null }, vendorToken);
+    expect(nulled.body.data.designation).toBe('');
+    expect((await TeamMember.findById(id)).designation).toBe('');
+  });
+
+  test('at most 100 characters', async () => {
+    const res = await api.post('/team', { name: 'Suresh', designation: 'r'.repeat(101) }, vendorToken);
+    expect(res.status).toBe(400);
+    expect(res.body.errors[0].field).toBe('designation');
+    expect((await api.post('/team', { name: 'Suresh', designation: 'r'.repeat(100) }, vendorToken)).status).toBe(201);
+  });
+
+  test('a member saved earlier with "Technician" keeps it', async () => {
+    const vendor = await f.createVendor();
+    const old = await TeamMember.collection.insertOne({
+      vendorId: vendor._id,
+      name: 'Old Member',
+      phone: '',
+      designation: 'Technician',
+      status: 'ACTIVE',
+      isDeleted: false,
+    });
+    const res = await api.post(
+      '/team/update',
+      { id: String(old.insertedId), name: 'Old Member Renamed' },
+      f.tokenFor(vendor, 'VENDOR')
+    );
+    expect(res.body.data.designation).toBe('Technician');
+    const listed = await api.get('/team', f.tokenFor(vendor, 'VENDOR'));
+    expect(listed.body.data[0].designation).toBe('Technician');
   });
 });

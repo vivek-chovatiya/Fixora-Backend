@@ -39,15 +39,15 @@ const createPhoneCustomer = async (overrides = {}) =>
     ...overrides,
   });
 
-const createPhoneVendor = async ({ authCode = '482913', ...overrides } = {}) =>
+// A vendor who registered by phone: phone proved, so they can sign in by one-time code. (No auth
+// code since the Phase 5 contract §1; pass `authCodeHash` to model an older vendor still holding one.)
+const createPhoneVendor = async (overrides = {}) =>
   Vendor.create({
     businessName: 'Kumar Electricals',
     ownerName: 'Ravi Kumar',
     ownerFirstName: 'Ravi',
     ownerLastName: 'Kumar',
     phone: '9000000001',
-    authCodeHash: authCode ? await bcrypt.hash(authCode, 4) : null,
-    authCodeIssuedAt: new Date(),
     phoneVerifiedAt: new Date(),
     approvalStatus: 'APPROVED',
     status: 'ACTIVE',

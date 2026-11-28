@@ -81,25 +81,9 @@ const verifyVendorOtp = {
   }),
 };
 
-const confirmVendorAuthCode = {
-  body: Joi.object({
-    registrationId,
-    authCode: sixDigitCode.required(),
-  }),
-};
-
-const regenerateVendorAuthCode = {
-  body: Joi.object({
-    registrationId,
-  }),
-};
-
-const signInVendor = {
-  body: Joi.object({
-    phone: phone.required(),
-    authCode: sixDigitCode.required(),
-  }),
-};
+// Vendor sign in by one-time code (Phase 5 contract §1.1): the customer's bodies exactly.
+const requestVendorSignInOtp = requestCustomerOtp;
+const verifyVendorSignInOtp = verifyCustomerOtp;
 
 module.exports = {
   login,
@@ -110,7 +94,6 @@ module.exports = {
   registerVendorByPhone,
   requestVendorOtp,
   verifyVendorOtp,
-  confirmVendorAuthCode,
-  regenerateVendorAuthCode,
-  signInVendor,
+  requestVendorSignInOtp,
+  verifyVendorSignInOtp,
 };

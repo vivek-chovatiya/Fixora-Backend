@@ -1,36 +1,33 @@
-const mongoose = require('mongoose');
 const Category = require('../models/category');
 const Vendor = require('../models/vendor');
 const VendorRegistration = require('../models/vendorregistration');
 const otpService = require('./otp');
 const sessionService = require('./session');
-const signInThrottle = require('./signinthrottle');
 const ApiError = require('../utils/ApiError');
 const clock = require('../utils/clock');
 const logger = require('../utils/logger');
-const secretCode = require('../utils/secretCode');
 const { ERROR_CODES } = require('../utils/errorCodes');
 const { maskPhoneForLog } = require('../utils/phone');
 
-const { OTP_PURPOSES } = otpService;
+const { OTP_PURPOSES, invalidCodeError } = otpService;
 
-// Vendor onboarding and sign in (PROJECT_BIBLE.md section 7A.2, amended 21/10/2026):
+// Vendor onboarding and sign in by one-time code (Phase 5 contract §1, owner decision 28/11/2026,
+// which removes the permanent auth code of PROJECT_BIBLE.md section 7A.2):
 //
-//   register → one-time code to the phone → verify → permanent 6-digit auth code, shown once
-//            → vendor types it back (confirm) → Vendor created ACTIVE + APPROVED → session
-//   returning vendor: phone + auth code → session
+//   register → one-time code to the phone → verify → Vendor created ACTIVE + APPROVED → session
+//   returning vendor: phone → one-time code → verify → session
 //
-// There is no administrator approval step (section 29 is superseded). Verifying the phone does
-// not sign the vendor in; only confirming the auth code does.
+// There is no administrator approval step (section 29 is superseded) and no standing credential:
+// every sign in proves the phone again, exactly as a customer's does. The `authCodeHash` older
+// vendors still hold is neither read nor written here any more.
 //
-// ⚠️ The auth code is a standing credential that never expires. It is generated here, returned
-// exactly once in the response that issues it, stored only as a bcrypt hash, and never logged or
-// put in an error. A wrong code, an unknown phone and a revoked code are refused identically on
-// sign in — telling them apart would reveal which numbers have accounts.
+// ⚠️ Asking for a sign-in code answers the same for every well-formed number — a vendor's,
+// nobody's, a suspended vendor's. An unknown number gets a decoy challenge (services/otp.js), so
+// every later answer matches a wrong code's too; suspension is revealed only after a right code.
+// Only a vendor whose phone was proved signs in this way: an email sign-up that merely named the
+// number is taken over through registration (claimUnprovenAccount), never through sign in.
 
 const REGISTRATION_TTL_HOURS = 24;
-// Same limit as a one-time code: five wrong typed-back codes and the code must be regenerated.
-const CONFIRM_MAX_WRONG_ATTEMPTS = 5;
 
 const registrationNotFound = () =>
   new ApiError(
@@ -46,32 +43,6 @@ const phoneAlreadyRegistered = () =>
     'An account already exists for this number. Try signing in instead.',
     null,
     ERROR_CODES.PHONE_ALREADY_REGISTERED
-  );
-
-const authCodeInvalid = () =>
-  new ApiError(
-    401,
-    'Those sign-in details were not recognised.',
-    null,
-    ERROR_CODES.AUTH_CODE_INVALID
-  );
-
-// Confirmation is not a sign in — the vendor holds no session yet — so a mismatch is a 400, never
-// a 401 the app could mistake for an expired session (lead's contract clarification, 17/11/2026).
-const confirmCodeInvalid = () =>
-  new ApiError(
-    400,
-    'That code does not match the one shown.',
-    null,
-    ERROR_CODES.AUTH_CODE_INVALID
-  );
-
-const confirmTooManyAttempts = () =>
-  new ApiError(
-    429,
-    'Too many incorrect codes. Please generate a new auth code.',
-    null,
-    ERROR_CODES.OTP_TOO_MANY_ATTEMPTS
   );
 
 const accountSuspended = () =>
@@ -96,7 +67,7 @@ class VendorAuthService {
       _id: registrationId,
       state: { $ne: 'COMPLETED' },
       expiresAt: { $gt: clock.now() },
-    }).select('+authCodeHash');
+    });
 
     if (!registration) {
       throw registrationNotFound();
@@ -105,14 +76,20 @@ class VendorAuthService {
   }
 
   // Only a proven phone blocks a registration (requests contract §8): an email sign-up that named
-  // this number without proving it is taken over at confirmation instead (confirmAuthCode).
+  // this number without proving it is taken over at verification instead (claimUnprovenAccount).
   async assertPhoneFree(phone) {
     if (await Vendor.exists({ phone, isDeleted: { $ne: true }, phoneVerifiedAt: { $ne: null } })) {
       throw phoneAlreadyRegistered();
     }
   }
 
-  // The registration's details and auth code, applied to the vendor account it creates or claims.
+  // The vendor a sign-in code may be issued to and accepted for: not deleted, phone proved.
+  // Status is not filtered here, so a suspended vendor gets a real code and then 403.
+  async findSignInVendor(phone) {
+    return Vendor.findOne({ phone, isDeleted: { $ne: true }, phoneVerifiedAt: { $ne: null } });
+  }
+
+  // The registration's details, applied to the vendor account it creates or claims.
   accountFields(registration, now) {
     return {
       businessName: registration.businessName,
@@ -120,8 +97,6 @@ class VendorAuthService {
       ownerFirstName: registration.ownerFirstName,
       ownerLastName: registration.ownerLastName,
       categoryIds: registration.serviceCategoryIds,
-      authCodeHash: registration.authCodeHash,
-      authCodeIssuedAt: registration.authCodeIssuedAt,
       phoneVerifiedAt: now,
       approvalStatus: 'APPROVED',
       availability: true,
@@ -159,17 +134,6 @@ class VendorAuthService {
     return claimed;
   }
 
-  // A fresh code that differs from the one it replaces: a "regenerated" code equal to the revoked
-  // one would revoke nothing, and six random digits do repeat one time in a million.
-  async issueFreshAuthCode(previousHash) {
-    let code = secretCode.generateNumericCode();
-    for (let tries = 0; previousHash && tries < 3; tries += 1) {
-      if (!(await secretCode.compareCode(code, previousHash))) break;
-      code = secretCode.generateNumericCode();
-    }
-    return { code, codeHash: await secretCode.hashCode(code), issuedAt: clock.now() };
-  }
-
   async register(details) {
     const { businessName, ownerFirstName, ownerLastName, phone, email, serviceCategoryIds } =
       details;
@@ -203,11 +167,19 @@ class VendorAuthService {
       expiresAt: new Date(now.getTime() + REGISTRATION_TTL_HOURS * 60 * 60 * 1000),
     });
 
-    const challenge = await otpService.issue({
-      purpose: OTP_PURPOSES.VENDOR_REGISTRATION,
-      phone,
-      registrationId: registration._id,
-    });
+    let challenge;
+    try {
+      challenge = await otpService.issue({
+        purpose: OTP_PURPOSES.VENDOR_REGISTRATION,
+        phone,
+        registrationId: registration._id,
+      });
+    } catch (error) {
+      // No code went out (the provider refused it, or a parallel request won the resend wait),
+      // and the caller never learns this id, so the registration would only be an orphan.
+      await VendorRegistration.deleteOne({ _id: registration._id });
+      throw error;
+    }
 
     logger.info(`vendor registration started for ${maskPhoneForLog(phone)}`);
 
@@ -223,6 +195,8 @@ class VendorAuthService {
     });
   }
 
+  // The proved phone completes the registration: the vendor is created (or an unproven sign-up of
+  // the number is taken over) ACTIVE + APPROVED, and signed in.
   async verifyOtp({ registrationId, code }) {
     const registration = await this.findLiveRegistration(registrationId);
 
@@ -233,119 +207,17 @@ class VendorAuthService {
       code,
     });
 
-    // Another registration for this number may have finished meanwhile; say so now rather than
-    // show a code that can never be confirmed.
+    // Another registration for this number may have finished meanwhile.
     await this.assertPhoneFree(registration.phone);
 
-    const issued = await this.issueFreshAuthCode(registration.authCodeHash);
-    const updated = await VendorRegistration.findOneAndUpdate(
-      { _id: registration._id, state: { $ne: 'COMPLETED' } },
-      {
-        $set: {
-          state: 'CODE_ISSUED',
-          authCodeHash: issued.codeHash,
-          authCodeIssuedAt: issued.issuedAt,
-          confirmAttempts: 0,
-        },
-      }
-    );
-    if (!updated) {
-      throw registrationNotFound();
-    }
-
-    logger.info(`vendor auth code issued for ${maskPhoneForLog(registration.phone)}`);
-
-    return { code: issued.code, issuedAt: issued.issuedAt.toISOString() };
-  }
-
-  async regenerateAuthCode({ registrationId }) {
-    const registration = await this.findLiveRegistration(registrationId);
-
-    // Before the phone is verified there is no code to replace, and issuing one would hand out
-    // a credential for a number nobody has proved.
-    if (registration.state !== 'CODE_ISSUED') {
-      throw registrationNotFound();
-    }
-
-    const issued = await this.issueFreshAuthCode(registration.authCodeHash);
-    const updated = await VendorRegistration.findOneAndUpdate(
-      { _id: registration._id, state: 'CODE_ISSUED' },
-      {
-        $set: {
-          authCodeHash: issued.codeHash,
-          authCodeIssuedAt: issued.issuedAt,
-          confirmAttempts: 0,
-        },
-      }
-    );
-    if (!updated) {
-      throw registrationNotFound();
-    }
-
-    logger.info(`vendor auth code regenerated for ${maskPhoneForLog(registration.phone)}`);
-
-    return { code: issued.code, issuedAt: issued.issuedAt.toISOString() };
-  }
-
-  async confirmAuthCode({ registrationId, authCode }) {
-    const registration = await this.findLiveRegistration(registrationId);
-
-    // Before the phone is verified no code exists, so nothing typed can match.
-    if (registration.state !== 'CODE_ISSUED' || !registration.authCodeHash) {
-      await secretCode.compareCode(authCode, null);
-      throw confirmCodeInvalid();
-    }
-    if (registration.confirmAttempts >= CONFIRM_MAX_WRONG_ATTEMPTS) {
-      throw confirmTooManyAttempts();
-    }
-
-    // Counted before the comparison, conditioned on the current hash, exactly as one-time codes
-    // are (services/otp.js): parallel guesses cannot pass the limit, and a code regenerated
-    // mid-request stays revoked.
-    const live = {
-      _id: registration._id,
-      state: 'CODE_ISSUED',
-      authCodeHash: registration.authCodeHash,
-    };
-    // `$not: { $gte }` rather than `$lt` so a registration saved before this counter existed (no
-    // field at all) still matches.
-    const reserved = await VendorRegistration.findOneAndUpdate(
-      { ...live, confirmAttempts: { $not: { $gte: CONFIRM_MAX_WRONG_ATTEMPTS } } },
-      { $inc: { confirmAttempts: 1 } },
-      { new: true }
-    );
-    if (!reserved) {
-      const current = await VendorRegistration.findOne({
-        _id: registration._id,
-        state: 'CODE_ISSUED',
-      }).select('+authCodeHash');
-      if (!current) throw registrationNotFound();
-      if (current.authCodeHash === registration.authCodeHash) throw confirmTooManyAttempts();
-      throw confirmCodeInvalid();
-    }
-
-    const matches = await secretCode.compareCode(authCode, registration.authCodeHash);
-    if (!matches) {
-      if (reserved.confirmAttempts >= CONFIRM_MAX_WRONG_ATTEMPTS) {
-        throw confirmTooManyAttempts();
-      }
-      throw confirmCodeInvalid();
-    }
-
-    await this.assertPhoneFree(registration.phone);
-
-    // Claim the registration before creating the account, conditioned on the hash just compared:
-    // a double tap cannot create two vendors, and a code regenerated mid-request stays revoked.
+    // Claimed before the account is created: a registration completes once, so a double tap (or
+    // two codes verified at once) cannot create two vendors.
     const claimed = await VendorRegistration.findOneAndUpdate(
-      { _id: registration._id, state: 'CODE_ISSUED', authCodeHash: registration.authCodeHash },
+      { _id: registration._id, state: { $ne: 'COMPLETED' } },
       { $set: { state: 'COMPLETED' } }
     );
     if (!claimed) {
-      const current = await VendorRegistration.findOne({
-        _id: registration._id,
-        state: 'CODE_ISSUED',
-      });
-      throw current ? confirmCodeInvalid() : registrationNotFound();
+      throw registrationNotFound();
     }
 
     let vendor;
@@ -360,9 +232,10 @@ class VendorAuthService {
           status: 'ACTIVE',
         }));
     } catch (error) {
+      // Handed back, so a fresh code can still finish it once the clash is gone.
       await VendorRegistration.updateOne(
         { _id: registration._id, state: 'COMPLETED', vendorId: null },
-        { $set: { state: 'CODE_ISSUED' } }
+        { $set: { state: claimed.state } }
       );
       if (error.code === 11000 && error.keyPattern && error.keyPattern.phone) {
         throw phoneAlreadyRegistered();
@@ -379,66 +252,36 @@ class VendorAuthService {
       throw accountSuspended();
     }
 
-    logger.info(`vendor activated and signed in for ${maskPhoneForLog(vendor.phone)}`);
+    logger.info(`vendor registered and signed in for ${maskPhoneForLog(vendor.phone)}`);
 
     return sessionService.createSession(vendor, 'VENDOR');
   }
 
-  async signIn({ phone, authCode }) {
-    // Before anything is looked up, and for any phone: a lock only real accounts could reach would
-    // itself reveal which numbers have one.
-    const attempt = await signInThrottle.reserve(phone);
+  async requestSignInOtp({ phone }) {
+    const vendor = await this.findSignInVendor(phone);
+    if (!vendor) {
+      logger.info(`vendor sign-in code asked for ${maskPhoneForLog(phone)}: no vendor account, none sent`);
+    }
+    return otpService.issue({ purpose: OTP_PURPOSES.VENDOR_SIGN_IN, phone, decoy: !vendor });
+  }
 
-    const vendor = await Vendor.findOne({ phone, isDeleted: { $ne: true } }).select(
-      '+authCodeHash'
-    );
+  async verifySignInOtp({ phone, code }) {
+    await otpService.verify({ purpose: OTP_PURPOSES.VENDOR_SIGN_IN, phone, code });
 
-    // compareCode spends a full bcrypt comparison even without a hash, so an unknown number takes
-    // as long to refuse as a wrong code.
-    const matches = await secretCode.compareCode(authCode, vendor ? vendor.authCodeHash : null);
-    if (!vendor || !matches) {
-      await signInThrottle.recordFailure(attempt);
-      throw authCodeInvalid();
+    // Nobody knows a decoy's code, so this is reached without a vendor only when the account was
+    // deleted after its code was sent: refused as a wrong code, which reveals nothing.
+    const vendor = await this.findSignInVendor(phone);
+    if (!vendor) {
+      throw invalidCodeError();
     }
 
     if (vendor.status !== 'ACTIVE') {
-      await signInThrottle.release(attempt);
       throw accountSuspended();
     }
-
-    await signInThrottle.clear(phone);
 
     logger.info(`vendor signed in for ${maskPhoneForLog(vendor.phone)}`);
 
     return sessionService.createSession(vendor, 'VENDOR');
-  }
-
-  // Administrator reissue (section 7A.2 amendment): the old code stops working at once.
-  async reissueAuthCode(vendorId) {
-    if (!mongoose.isValidObjectId(vendorId)) {
-      throw new ApiError(404, 'Vendor not found.');
-    }
-
-    const vendor = await Vendor.findOne({ _id: vendorId, isDeleted: { $ne: true } }).select(
-      '+authCodeHash'
-    );
-    if (!vendor) {
-      throw new ApiError(404, 'Vendor not found.');
-    }
-
-    const issued = await this.issueFreshAuthCode(vendor.authCodeHash);
-    // The old code dies now, and so does every session opened with it (requests contract §8).
-    await Vendor.updateOne(
-      { _id: vendor._id },
-      {
-        $set: { authCodeHash: issued.codeHash, authCodeIssuedAt: issued.issuedAt },
-        $inc: { tokenVersion: 1 },
-      }
-    );
-
-    logger.info(`vendor auth code reissued by an administrator for vendor ${vendor._id}`);
-
-    return { code: issued.code, issuedAt: issued.issuedAt.toISOString() };
   }
 }
 

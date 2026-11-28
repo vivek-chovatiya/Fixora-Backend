@@ -1,17 +1,19 @@
 const mongoose = require('mongoose');
 const hideSecrets = require('../utils/hideSecrets');
 
-// A vendor's onboarding in progress (PROJECT_BIBLE.md section 7A.2, amended 21/10/2026):
+// A vendor's onboarding in progress (Phase 5 contract §1.2, 28/11/2026):
 //   OTP_PENDING  registered, one-time code sent to the phone
-//   CODE_ISSUED  phone verified, permanent auth code generated and shown once
-//   COMPLETED    vendor typed the code back; the Vendor account now exists (vendorId)
+//   COMPLETED    the code proved the phone; the Vendor account now exists (vendorId)
+//   CODE_ISSUED  legacy only: phone verified under the removed auth-code flow. Such a registration
+//                is still live — a new code (resend) and its verification complete it.
 //
 // Kept apart from the vendors collection so an unfinished sign up never appears in vendor lists,
 // never holds the phone number against a real account, and simply lapses: the TTL index removes it
 // 24 hours after it was started (the contract allows discarding unconfirmed registrations then).
 //
-// ⚠️ `authCodeHash` is a bcrypt hash of the code shown to the vendor — select: false, never logged.
-// It is copied to the Vendor on confirmation, so regenerating here before then revokes the old one.
+// ⚠️ `authCodeHash`, `authCodeIssuedAt` and `confirmAttempts` belong to the removed auth-code flow
+// and are no longer read or written; a legacy record may still hold a bcrypt hash, so it stays
+// select: false and hidden.
 const vendorRegistrationSchema = new mongoose.Schema(
   {
     businessName: { type: String, required: true, trim: true },
@@ -27,7 +29,6 @@ const vendorRegistrationSchema = new mongoose.Schema(
     },
     authCodeHash: { type: String, select: false, default: null },
     authCodeIssuedAt: { type: Date, default: null },
-    // Wrong typed-back codes for the current auth code; reset whenever a new code is issued.
     confirmAttempts: { type: Number, default: 0 },
     vendorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Vendor', default: null },
     expiresAt: { type: Date, required: true },

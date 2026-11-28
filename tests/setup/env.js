@@ -9,6 +9,21 @@ process.env.JWT_SECRET = 'fixora-test-only-secret';
 process.env.JWT_EXPIRES = '7d';
 // Empty, not absent, so .env's development value cannot leak in; suites switch it on per test.
 process.env.OTP_STATIC_CODE = '';
+// Codes are never sent from a test run: no channel, and no WhatsApp setting from .env can leak in
+// (Phase 5 contract §2). tests/otpDelivery.test.js switches WhatsApp on with fetch replaced.
+process.env.OTP_DELIVERY_CHANNEL = 'none';
+for (const name of [
+  'WHATSAPP_ACCESS_TOKEN',
+  'WHATSAPP_PHONE_NUMBER_ID',
+  'WHATSAPP_OTP_TEMPLATE_NAME',
+  'WHATSAPP_OTP_TEMPLATE_LANGUAGE',
+  'WHATSAPP_API_VERSION',
+]) {
+  process.env[name] = '';
+}
+// Push is off for every test run, so no key path from .env can leak in and Firebase is never
+// reached (Phase 5 contract §6.2). tests/push.test.js switches it on with firebase-admin mocked.
+process.env.FIREBASE_SERVICE_ACCOUNT_PATH = '';
 process.env.LOG_LEVEL = 'debug';
 // The per-IP /auth limit is read per request; suites make many auth calls from one address, so it
 // is out of the way by default and tests/rateLimits.test.js lowers it to prove it.

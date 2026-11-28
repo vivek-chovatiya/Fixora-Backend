@@ -71,15 +71,25 @@ describe('1. OTP_STATIC_CODE in production', () => {
   });
 
   test('start-up logs it as an error outside development/test, a warning inside, never the value', () => {
-    const logger = { error: jest.fn(), warn: jest.fn() };
+    const logger = { error: jest.fn(), warn: jest.fn(), info: jest.fn() };
+    // A channel that could deliver, so the "no delivery channel" error (Phase 5 review fix
+    // 28/11/2026) stays out of the count and only the static code is judged. Not a real token.
+    const env = {
+      JWT_SECRET: 's',
+      OTP_STATIC_CODE: '123456',
+      OTP_DELIVERY_CHANNEL: 'whatsapp',
+      WHATSAPP_ACCESS_TOKEN: 'EAAG-fixora-test-token-review',
+      WHATSAPP_PHONE_NUMBER_ID: '109876543210987',
+      WHATSAPP_OTP_TEMPLATE_NAME: 'fixora_otp',
+    };
     for (const NODE_ENV of ['production', 'staging', undefined]) {
-      checkEnvironment({ JWT_SECRET: 's', OTP_STATIC_CODE: '123456', NODE_ENV }, logger);
+      checkEnvironment({ ...env, NODE_ENV }, logger);
     }
     expect(logger.error).toHaveBeenCalledTimes(3);
     for (const [message] of logger.error.mock.calls) expect(message).toContain('ignored');
 
-    checkEnvironment({ JWT_SECRET: 's', OTP_STATIC_CODE: '123456', NODE_ENV: 'development' }, logger);
-    checkEnvironment({ JWT_SECRET: 's', OTP_STATIC_CODE: '123456', NODE_ENV: 'test' }, logger);
+    checkEnvironment({ ...env, NODE_ENV: 'development' }, logger);
+    checkEnvironment({ ...env, NODE_ENV: 'test' }, logger);
     expect(logger.warn).toHaveBeenCalledTimes(2);
     expect(logger.error).toHaveBeenCalledTimes(3);
     for (const call of [...logger.error.mock.calls, ...logger.warn.mock.calls]) {
@@ -175,8 +185,7 @@ describe('2. an email sign-up cannot claim a phone', () => {
     });
     expect(registered.status).toBe(201);
     const { registrationId } = registered.body.data;
-    const { code } = (await api.post('/auth/vendor/otp/verify', { registrationId, code: OTP })).body.data;
-    const confirmed = await api.post('/auth/vendor/auth-code/confirm', { registrationId, authCode: code });
+    const confirmed = await api.post('/auth/vendor/otp/verify', { registrationId, code: OTP });
     expect(confirmed.status).toBe(200);
     expect(confirmed.body.data.user.id).toBe(String(squat.body.data.user.id));
 
@@ -266,21 +275,6 @@ describe('4. a vendor who does not hold the work never sees how it was done', ()
 });
 
 describe('6. sessions end when they should', () => {
-  test('an admin auth-code reissue ends the vendor’s sessions', async () => {
-    const { token: adminToken } = await f.createAdmin();
-    const vendor = await f.createPhoneVendor({ phone: '9000000001', authCode: '482913' });
-    const session = (await api.post('/auth/vendor/signin', { phone: '9000000001', authCode: '482913' })).body.data.token;
-    expect((await api.get('/auth/me', session)).status).toBe(200);
-
-    const { code } = (await api.post('/vendors/auth-code/regenerate', { id: String(vendor._id) }, adminToken)).body.data;
-    const ended = await api.get('/auth/me', session);
-    expect(ended.status).toBe(401);
-    expect(ended.body.code).toBe('UNAUTHORIZED');
-
-    const fresh = (await api.post('/auth/vendor/signin', { phone: '9000000001', authCode: code })).body.data.token;
-    expect((await api.get('/auth/me', fresh)).status).toBe(200);
-  });
-
   test('suspension ends a customer’s sessions, and reactivating does not bring them back', async () => {
     const { token: adminToken } = await f.createAdmin();
     const signedIn = await signInCustomer('9876543210');

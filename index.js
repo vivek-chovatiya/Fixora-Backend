@@ -59,7 +59,8 @@ app.use(errorHandler);
 
 // Start Server & Connect to DB
 const startServer = async () => {
-  // Refuse to start without JWT_SECRET; flag OTP_STATIC_CODE (ignored in production)
+  // Refuse to start without JWT_SECRET, or (outside development/test) with a one-time code
+  // delivery channel that cannot deliver; flag OTP_STATIC_CODE (ignored in production)
   try {
     checkEnvironment(process.env, logger);
   } catch (error) {

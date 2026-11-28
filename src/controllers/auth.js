@@ -91,37 +91,29 @@ class AuthController {
     }
   }
 
-  // The response carries the vendor's permanent auth code — the one time it is ever shown.
+  // Proving the phone completes the registration: the response is the new vendor's session.
   async verifyVendorOtp(req, res, next) {
     try {
-      const authCode = await vendorAuthService.verifyOtp(req.body);
-      return ApiResponse.success(res, 'Phone verified. Save your auth code.', authCode);
+      const session = await vendorAuthService.verifyOtp(req.body);
+      return ApiResponse.success(res, 'Vendor registered and signed in successfully.', session);
     } catch (error) {
       next(error);
     }
   }
 
-  async confirmVendorAuthCode(req, res, next) {
+  // Answers the same for every number, vendor or not (Phase 5 contract §1.1).
+  async requestVendorSignInOtp(req, res, next) {
     try {
-      const session = await vendorAuthService.confirmAuthCode(req.body);
-      return ApiResponse.success(res, 'Vendor signed in successfully.', session);
+      const challenge = await vendorAuthService.requestSignInOtp(req.body);
+      return ApiResponse.success(res, 'Verification code sent.', challenge);
     } catch (error) {
       next(error);
     }
   }
 
-  async regenerateVendorAuthCode(req, res, next) {
+  async verifyVendorSignInOtp(req, res, next) {
     try {
-      const authCode = await vendorAuthService.regenerateAuthCode(req.body);
-      return ApiResponse.success(res, 'A new auth code was issued.', authCode);
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  async signInVendor(req, res, next) {
-    try {
-      const session = await vendorAuthService.signIn(req.body);
+      const session = await vendorAuthService.verifySignInOtp(req.body);
       return ApiResponse.success(res, 'Vendor signed in successfully.', session);
     } catch (error) {
       next(error);
